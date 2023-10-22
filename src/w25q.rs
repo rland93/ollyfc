@@ -132,7 +132,8 @@ impl SR3 {
     }
 }
 
-enum MemError<SpiE> {
+#[derive(Debug, Format)]
+pub enum MemError<SpiE> {
     SpiError(SpiE),
     NotAlignedError,
     OutOfBoundsError,
@@ -241,10 +242,6 @@ impl W25Q {
         self.spi
             .write(&self.cmd_and_address(Command::FastRead, address))?;
         self.spi.write(&[0xFF])?; // dummy byte
-
-        let mut spi = self.spi.release();
-
-        self.spi.read(buf)?;
         self.cs.set_high();
 
         self.wait_busy()?;
