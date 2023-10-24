@@ -28,16 +28,16 @@ mod app {
 
     use stm32f4xx_hal::timer::{FTimer, MonoTimer};
     use stm32f4xx_hal::{
-        gpio::{Output, Pin},
+        gpio::{Edge, Output, Pin},
         i2c::I2c,
-        pac::{I2C2, SPI2, TIM10, TIM2, TIM4},
+        pac::{Interrupt, I2C2, SPI2, TIM10, TIM2, TIM4},
         prelude::*,
         spi::{Mode, Phase, Polarity, Spi},
         timer::{Delay, DelayMs, DelayUs, SysCounterHz, Timer, Timer2},
     };
 
     use mpu6050_dmp::{
-        accel::Accel, address::Address, quaternion::Quaternion, sensor::Mpu6050,
+        accel::Accel, address::Address, config, quaternion::Quaternion, registers, sensor::Mpu6050,
         yaw_pitch_roll::YawPitchRoll,
     };
 
@@ -64,7 +64,7 @@ mod app {
     }
 
     #[init]
-    fn init(cx: init::Context) -> (Shared, Local) {
+    fn init(mut cx: init::Context) -> (Shared, Local) {
         // Setup clocks
         let rcc = cx.device.RCC.constrain();
         let systick_mono_token = rtic_monotonics::create_systick_token!();
@@ -105,7 +105,12 @@ mod app {
         log_write_task::spawn(log_ch_r).unwrap();
 
         debug!("mpu6050...");
-        // TODO configure int pin mpu6050
+        // Configure pin for interrupt on data ready
+        let mut mpu6050_int = gpiob.pb8.into_pull_up_input();
+        mpu6050_int.enable_interrupt(&mut cx.device.EXTI);
+        mpu6050_int.trigger_on_edge(&mut cx.device.EXTI, Edge::Rising);
+        rtic::pend(mpu6050_int.interrupt());
+
         let mut delay_tim5 = cx.device.TIM5.delay_us(&clocks);
         let i2c2_sda = gpiob
             .pb9
@@ -120,6 +125,10 @@ mod app {
         let i2c2 = cx.device.I2C2.i2c((i2c2_scl, i2c2_sda), 400.kHz(), &clocks);
         let mut mpu6050: Mpu6050<I2c<I2C2>> = Mpu6050::new(i2c2, Address::default()).unwrap();
         mpu6050.initialize_dmp(&mut delay_tim5).unwrap();
+        mpu6050.enable_fifo().unwrap();
+        mpu6050
+            .set_digital_lowpass_filter(config::DigitalLowPassFilter::Filter2)
+            .unwrap();
 
         (
             Shared {
@@ -193,9 +202,8 @@ mod app {
         }
     }
 
-    // TODO run this task as interrupt from INT pin
-    #[task(local=[mpu6050], shared=[sensor])]
-    async fn sensor_task(mut cx: sensor_task::Context) {
+    #[task(binds=EXTI0, local=[mpu6050], shared=[sensor])]
+    fn sensor_task(mut cx: sensor_task::Context) {
         loop {
             let len = cx.local.mpu6050.get_fifo_count().unwrap();
             if len >= 28 {
