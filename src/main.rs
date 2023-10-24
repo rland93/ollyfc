@@ -10,15 +10,17 @@ use panic_probe as _;
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
 mod app {
-    use defmt::{debug, info};
-    use defmt_rtt as _;
-    use fc2::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
-    use fc2::w25q;
+
     use ollyfc::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
     use ollyfc::{sbus, w25q};
+
+    use defmt::{debug, info};
+    use defmt_rtt as _;
+
+    use mpu6050_dmp::accel;
+
     use rtic_monotonic::Monotonic;
     use rtic_monotonics::systick::Systick;
-
     use rtic_sync::{
         channel::{Receiver, Sender},
         make_channel,
@@ -27,10 +29,16 @@ mod app {
     use stm32f4xx_hal::timer::{FTimer, MonoTimer};
     use stm32f4xx_hal::{
         gpio::{Output, Pin},
-        pac::{SPI2, TIM10, TIM2, TIM4},
+        i2c::I2c,
+        pac::{I2C2, SPI2, TIM10, TIM2, TIM4},
         prelude::*,
         spi::{Mode, Phase, Polarity, Spi},
         timer::{Delay, DelayMs, DelayUs, SysCounterHz, Timer, Timer2},
+    };
+
+    use mpu6050_dmp::{
+        accel::Accel, address::Address, quaternion::Quaternion, sensor::Mpu6050,
+        yaw_pitch_roll::YawPitchRoll,
     };
 
     const LOGDATA_CHAN_SIZE: usize = 128;
@@ -51,7 +59,8 @@ mod app {
         log_grp_idx: u8,
         flight_logger: FlightLogger<w25q::W25Q>,
         log_delay: Delay<TIM4, 1000>,
-        log_buffer: [u8; 8 * LOG_SIZE],
+        log_buffer: [FlightLogData; LOGS_IN_PAGE],
+        mpu6050: Mpu6050<I2c<I2C2>>,
     }
 
     #[init]
@@ -95,6 +104,23 @@ mod app {
         log_collect_task::spawn(log_ch_s.clone()).unwrap();
         log_write_task::spawn(log_ch_r).unwrap();
 
+        debug!("mpu6050...");
+        // TODO configure int pin mpu6050
+        let mut delay_tim5 = cx.device.TIM5.delay_us(&clocks);
+        let i2c2_sda = gpiob
+            .pb9
+            .into_alternate()
+            .internal_pull_up(true)
+            .set_open_drain();
+        let i2c2_scl = gpiob
+            .pb10
+            .into_alternate()
+            .internal_pull_up(true)
+            .set_open_drain();
+        let i2c2 = cx.device.I2C2.i2c((i2c2_scl, i2c2_sda), 400.kHz(), &clocks);
+        let mut mpu6050: Mpu6050<I2c<I2C2>> = Mpu6050::new(i2c2, Address::default()).unwrap();
+        mpu6050.initialize_dmp(&mut delay_tim5).unwrap();
+
         (
             Shared {
                 timer10: cx.device.TIM10.delay(&clocks),
@@ -105,8 +131,9 @@ mod app {
             Local {
                 flight_logger: FlightLogger::new(mem),
                 log_delay,
-                log_buffer: [0u8; 8 * LOG_SIZE],
+                log_buffer: [FlightLogData::default(); LOGS_IN_PAGE],
                 log_grp_idx: 0,
+                mpu6050: mpu6050,
             },
         )
     }
@@ -150,8 +177,7 @@ mod app {
 
             let buf_idx = (*cx.local.log_grp_idx).clone() as usize;
             // store log data into the buffer
-            cx.local.log_buffer[buf_idx * LOG_SIZE..(buf_idx + 1) * LOG_SIZE]
-                .copy_from_slice(&log_data.to_bytes());
+            cx.local.log_buffer[buf_idx] = log_data;
 
             if *cx.local.log_grp_idx == 7u8 {
                 // TODO: write to flash. For now we'll implement a small delay to
@@ -163,6 +189,38 @@ mod app {
             } else {
                 // increment the index
                 *cx.local.log_grp_idx += 1u8;
+            }
+        }
+    }
+
+    // TODO run this task as interrupt from INT pin
+    #[task(local=[mpu6050], shared=[sensor])]
+    async fn sensor_task(mut cx: sensor_task::Context) {
+        loop {
+            let len = cx.local.mpu6050.get_fifo_count().unwrap();
+            if len >= 28 {
+                // Grab newest from buffer
+                let mut buf = [0; 28];
+                let buf = cx.local.mpu6050.read_fifo(&mut buf).unwrap();
+                // Gyro
+                let quat = Quaternion::from_bytes(&buf[..16]).unwrap();
+                let ypr = YawPitchRoll::from(quat);
+                // Acceleration
+                let mut accelbytes: [u8; 6] = [0; 6];
+                accelbytes.copy_from_slice(&buf[16..22]);
+                let accel = Accel::from_bytes(accelbytes);
+                let accel_scaled = accel.scaled(accel::AccelFullScale::G4);
+                // store sensor input
+                cx.shared.sensor.lock(|s| {
+                    *s = SensorInput {
+                        pitch: ypr.pitch,
+                        yaw: ypr.yaw,
+                        roll: ypr.roll,
+                        accel_x: accel_scaled.x(),
+                        accel_y: accel_scaled.y(),
+                        accel_z: accel_scaled.z(),
+                    };
+                })
             }
         }
     }

@@ -4,7 +4,9 @@ use crate::sbus::FlightControls;
 use crate::w25q::{FlashMem, MemError};
 
 // size of the log item, in bytes
-pub const LOG_SIZE: usize = 32;
+pub const LOG_SIZE: usize = 64;
+pub const LOG_PAGE_SIZE: usize = crate::w25q::PAGE_SIZE as usize;
+pub const LOGS_IN_PAGE: usize = LOG_PAGE_SIZE / LOG_SIZE;
 
 pub struct FlightLogger<T: FlashMem> {
     pub mem: T,
@@ -47,23 +49,23 @@ impl<T: FlashMem> FlightLogger<T> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct SensorInput {
-    pub accel_x: i16,
-    pub accel_y: i16,
-    pub accel_z: i16,
-    pub pitch: i16,
-    pub yaw: i16,
-    pub roll: i16,
+    pub accel_x: f32,
+    pub accel_y: f32,
+    pub accel_z: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+    pub roll: f32,
 }
 
 impl SensorInput {
     pub fn default() -> Self {
         Self {
-            accel_x: 0,
-            accel_y: 0,
-            accel_z: 0,
-            pitch: 0,
-            yaw: 0,
-            roll: 0,
+            accel_x: 0.0,
+            accel_y: 0.0,
+            accel_z: 0.0,
+            pitch: 0.0,
+            yaw: 0.0,
+            roll: 0.0,
         }
     }
 }
@@ -114,28 +116,26 @@ pub struct FlightLogData {
 impl FlightLogData {
     pub fn to_bytes(&self) -> [u8; LOG_SIZE] {
         let mut bytes = [0u8; LOG_SIZE];
-        // bytes[0] -- reserved
-        bytes[0] = 0 as u8;
 
         // timestamp
-        bytes[1..5].copy_from_slice(&self.timestamp.to_be_bytes());
+        bytes[0..4].copy_from_slice(&self.timestamp.to_be_bytes());
 
         // sbus
-        bytes[5..7].copy_from_slice(&self.sbus_input.throttle.to_be_bytes());
-        bytes[7..9].copy_from_slice(&self.sbus_input.aileron.to_be_bytes());
-        bytes[9..11].copy_from_slice(&self.sbus_input.elevator.to_be_bytes());
-        bytes[11..13].copy_from_slice(&self.sbus_input.rudder.to_be_bytes());
-        bytes[13..15].copy_from_slice(&self.sbus_input.arm.to_be_bytes());
-        bytes[15..17].copy_from_slice(&self.sbus_input.enable.to_be_bytes());
-        bytes[17..19].copy_from_slice(&self.sbus_input.record.to_be_bytes());
+        bytes[4..6].copy_from_slice(&self.sbus_input.throttle.to_be_bytes());
+        bytes[6..8].copy_from_slice(&self.sbus_input.aileron.to_be_bytes());
+        bytes[8..10].copy_from_slice(&self.sbus_input.elevator.to_be_bytes());
+        bytes[10..12].copy_from_slice(&self.sbus_input.rudder.to_be_bytes());
+        bytes[12..14].copy_from_slice(&self.sbus_input.arm.to_be_bytes());
+        bytes[14..16].copy_from_slice(&self.sbus_input.enable.to_be_bytes());
+        bytes[16..18].copy_from_slice(&self.sbus_input.record.to_be_bytes());
 
         // sensor
-        bytes[19..21].copy_from_slice(&self.sensor_input.accel_x.to_be_bytes());
-        bytes[21..23].copy_from_slice(&self.sensor_input.accel_y.to_be_bytes());
-        bytes[23..25].copy_from_slice(&self.sensor_input.accel_z.to_be_bytes());
-        bytes[25..27].copy_from_slice(&self.sensor_input.pitch.to_be_bytes());
-        bytes[27..29].copy_from_slice(&self.sensor_input.yaw.to_be_bytes());
-        bytes[29..31].copy_from_slice(&self.sensor_input.roll.to_be_bytes());
+        bytes[18..22].copy_from_slice(&self.sensor_input.accel_x.to_be_bytes());
+        bytes[22..26].copy_from_slice(&self.sensor_input.accel_y.to_be_bytes());
+        bytes[30..34].copy_from_slice(&self.sensor_input.accel_z.to_be_bytes());
+        bytes[34..38].copy_from_slice(&self.sensor_input.pitch.to_be_bytes());
+        bytes[38..42].copy_from_slice(&self.sensor_input.yaw.to_be_bytes());
+        bytes[42..46].copy_from_slice(&self.sensor_input.roll.to_be_bytes());
 
         bytes
     }
