@@ -144,6 +144,17 @@ impl From<SpiE> for MemError<SpiE> {
     }
 }
 
+pub trait FlashMem {
+    fn page_size(&self) -> u32;
+    fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>>;
+    fn fast_read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>>;
+    fn page_program(&mut self, address: u32, buf: &[u8; 256]) -> Result<(), MemError<SpiE>>;
+    fn sector_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>>;
+    fn block32_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>>;
+    fn block64_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>>;
+    fn chip_erase(&mut self) -> Result<(), MemError<SpiE>>;
+}
+
 pub struct W25Q {
     spi: Spi<SPI2>,
     cs: Pin<'A', 12, Output<PushPull>>,
@@ -153,6 +164,10 @@ pub struct W25Q {
 impl W25Q {
     pub fn new(spi: Spi<SPI2>, cs: Pin<'A', 12, Output>, timer: Delay<TIM3, 1000000>) -> Self {
         Self { spi, cs, timer }
+    }
+
+    pub fn page_size(&self) -> u32 {
+        PAGE_SIZE
     }
 
     pub fn wait_busy(&mut self) -> Result<(), MemError<SpiE>> {
@@ -355,5 +370,39 @@ impl W25Q {
 
         self.wait_busy()?;
         Ok(())
+    }
+}
+
+impl FlashMem for W25Q {
+    fn page_size(&self) -> u32 {
+        self.page_size()
+    }
+
+    fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>> {
+        self.read(address, buf)
+    }
+
+    fn fast_read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>> {
+        self.fast_read(address, buf)
+    }
+
+    fn page_program(&mut self, address: u32, buf: &[u8; 256]) -> Result<(), MemError<SpiE>> {
+        self.page_program(address, buf)
+    }
+
+    fn sector_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>> {
+        self.sector_erase(address)
+    }
+
+    fn block32_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>> {
+        self.block32_erase(address)
+    }
+
+    fn block64_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>> {
+        self.block64_erase(address)
+    }
+
+    fn chip_erase(&mut self) -> Result<(), MemError<SpiE>> {
+        self.chip_erase()
     }
 }
