@@ -7,16 +7,13 @@
 #![allow(unused_variables)]
 
 use panic_probe as _;
-mod flightlogger;
-mod sbus;
-mod w25q;
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
 mod app {
-    use crate::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
-    use crate::w25q;
     use defmt::{debug, info};
     use defmt_rtt as _;
+    use fc2::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
+    use fc2::w25q;
     use rtic_monotonic::Monotonic;
     use rtic_monotonics::systick::Systick;
 
@@ -70,14 +67,14 @@ mod app {
         let gpiob = cx.device.GPIOB.split();
         let gpioa = cx.device.GPIOA.split();
 
-        debug!("spi2, mem...");
-        let spi2_sck = gpiob.pb13.into_alternate();
-        let spi2_miso = gpiob.pb14.into_alternate();
-        let spi2_mosi = gpiob.pb15.into_alternate();
-        let spi2_cs: Pin<'A', 12, Output> = gpioa.pa12.into_push_pull_output();
-        let spi2: Spi<SPI2> = Spi::new(
-            cx.device.SPI2,
-            (spi2_sck, spi2_miso, spi2_mosi),
+        debug!("spi1, mem...");
+        let spi1_sck = gpioa.pa5.into_alternate();
+        let spi1_miso = gpioa.pa6.into_alternate();
+        let spi1_mosi = gpioa.pa7.into_alternate();
+        let spi1_cs: Pin<'A', 4, Output> = gpioa.pa4.into_push_pull_output();
+        let spi1: Spi<SPI1> = Spi::new(
+            cx.device.SPI1,
+            (spi1_sck, spi1_miso, spi1_mosi),
             Mode {
                 polarity: Polarity::IdleLow,
                 phase: Phase::CaptureOnFirstTransition,
@@ -86,7 +83,7 @@ mod app {
             &clocks,
         );
         let timer = cx.device.TIM3.delay_us(&clocks);
-        let mem = w25q::W25Q::new(spi2, spi2_cs, timer);
+        let mem = w25q::W25Q::new(spi1, spi1_cs, timer);
 
         debug!("logging...");
         let log_timer: MonoTimer<TIM2, 1000> = FTimer::new(cx.device.TIM2, &clocks).monotonic();

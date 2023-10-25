@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-use defmt::{info, Format};
+use defmt::Format;
 use stm32f4xx_hal::{
     gpio::{Output, Pin, PushPull},
-    pac::{SPI2, TIM3},
+    pac::{SPI1, TIM3},
     prelude::*,
-    spi::{Error as SpiE, Mode, Phase, Polarity, Spi},
-    timer::{Delay, DelayUs},
+    spi::{Error as SpiE, Spi},
+    timer::Delay,
 };
 
 #[repr(u8)]
@@ -147,7 +147,6 @@ impl From<SpiE> for MemError<SpiE> {
 pub trait FlashMem {
     fn page_size(&self) -> u32;
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>>;
-    fn fast_read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>>;
     fn page_program(&mut self, address: u32, buf: &[u8; 256]) -> Result<(), MemError<SpiE>>;
     fn sector_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>>;
     fn block32_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>>;
@@ -156,13 +155,13 @@ pub trait FlashMem {
 }
 
 pub struct W25Q {
-    spi: Spi<SPI2>,
-    cs: Pin<'A', 12, Output<PushPull>>,
+    spi: Spi<SPI1>,
+    cs: Pin<'A', 4, Output<PushPull>>,
     pub timer: Delay<TIM3, 1000000>,
 }
 
 impl W25Q {
-    pub fn new(spi: Spi<SPI2>, cs: Pin<'A', 12, Output>, timer: Delay<TIM3, 1000000>) -> Self {
+    pub fn new(spi: Spi<SPI1>, cs: Pin<'A', 4, Output>, timer: Delay<TIM3, 1000000>) -> Self {
         Self { spi, cs, timer }
     }
 
@@ -245,18 +244,6 @@ impl W25Q {
         self.spi
             .write(&self.cmd_and_address(Command::ReadData, address))?;
         self.spi.read(buf)?;
-        self.cs.set_high();
-
-        self.wait_busy()?;
-
-        Ok(())
-    }
-
-    pub fn fast_read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>> {
-        self.cs.set_low();
-        self.spi
-            .write(&self.cmd_and_address(Command::FastRead, address))?;
-        self.spi.write(&[0xFF])?; // dummy byte
         self.cs.set_high();
 
         self.wait_busy()?;
@@ -380,10 +367,6 @@ impl FlashMem for W25Q {
 
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>> {
         self.read(address, buf)
-    }
-
-    fn fast_read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>> {
-        self.fast_read(address, buf)
     }
 
     fn page_program(&mut self, address: u32, buf: &[u8; 256]) -> Result<(), MemError<SpiE>> {

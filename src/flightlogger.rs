@@ -1,6 +1,6 @@
 use defmt::{debug, error};
 
-use crate::sbus::{self, FlightControls};
+use crate::sbus::FlightControls;
 use crate::w25q::{FlashMem, MemError};
 
 // size of the log item, in bytes
