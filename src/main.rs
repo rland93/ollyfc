@@ -30,7 +30,7 @@ mod app {
     use stm32f4xx_hal::{
         gpio::{Edge, Output, Pin},
         i2c::I2c,
-        pac::{Interrupt, I2C2, SPI2, TIM10, TIM2, TIM4},
+        pac::{Interrupt, I2C2, SPI1, TIM10, TIM2, TIM4},
         prelude::*,
         spi::{Mode, Phase, Polarity, Spi},
         timer::{Delay, DelayMs, DelayUs, SysCounterHz, Timer, Timer2},
@@ -42,8 +42,8 @@ mod app {
     };
 
     const LOGDATA_CHAN_SIZE: usize = 128;
-    const LOG_FREQUENCY_MS: u32 = 2; // 500 Hz
-
+    const LOG_FREQUENCY_MS: u32 = 500; // 500 Hz
+    const LOG_BUFF_SZ: usize = w25q::PAGE_SIZE as usize / LOG_SIZE;
     #[shared]
     struct Shared {
         // Logging
@@ -59,14 +59,16 @@ mod app {
         log_grp_idx: u8,
         flight_logger: FlightLogger<w25q::W25Q>,
         log_delay: Delay<TIM4, 1000>,
-        log_buffer: [FlightLogData; LOGS_IN_PAGE],
+        log_buffer: [FlightLogData; LOG_BUFF_SZ],
         mpu6050: Mpu6050<I2c<I2C2>>,
+        mpu6050_int: Pin<'B', 8>,
     }
 
     #[init]
     fn init(mut cx: init::Context) -> (Shared, Local) {
         // Setup clocks
         let rcc = cx.device.RCC.constrain();
+        let mut syscfg = cx.device.SYSCFG.constrain();
         let systick_mono_token = rtic_monotonics::create_systick_token!();
         Systick::start(cx.core.SYST, 48_000_000, systick_mono_token);
         let clocks = rcc.cfgr.sysclk(48.MHz()).freeze();
@@ -106,10 +108,10 @@ mod app {
 
         debug!("mpu6050...");
         // Configure pin for interrupt on data ready
-        let mut mpu6050_int = gpiob.pb8.into_pull_up_input();
+        let mut mpu6050_int = gpiob.pb8.into_pull_down_input();
+        mpu6050_int.make_interrupt_source(&mut syscfg);
+        mpu6050_int.trigger_on_edge(&mut cx.device.EXTI, Edge::Falling);
         mpu6050_int.enable_interrupt(&mut cx.device.EXTI);
-        mpu6050_int.trigger_on_edge(&mut cx.device.EXTI, Edge::Rising);
-        rtic::pend(mpu6050_int.interrupt());
 
         let mut delay_tim5 = cx.device.TIM5.delay_us(&clocks);
         let i2c2_sda = gpiob
@@ -130,6 +132,8 @@ mod app {
             .set_digital_lowpass_filter(config::DigitalLowPassFilter::Filter2)
             .unwrap();
 
+        mpu6050.interrupt_fifo_oflow_en().unwrap();
+
         (
             Shared {
                 timer10: cx.device.TIM10.delay(&clocks),
@@ -140,9 +144,10 @@ mod app {
             Local {
                 flight_logger: FlightLogger::new(mem),
                 log_delay,
-                log_buffer: [FlightLogData::default(); LOGS_IN_PAGE],
+                log_buffer: [FlightLogData::default(); LOG_BUFF_SZ],
                 log_grp_idx: 0,
                 mpu6050: mpu6050,
+                mpu6050_int,
             },
         )
     }
@@ -188,7 +193,7 @@ mod app {
             // store log data into the buffer
             cx.local.log_buffer[buf_idx] = log_data;
 
-            if *cx.local.log_grp_idx == 7u8 {
+            if *cx.local.log_grp_idx == LOG_BUFF_SZ as u8 - 1 {
                 // TODO: write to flash. For now we'll implement a small delay to
                 // simulate the flash write time
                 cx.shared.timer10.lock(|t| t.delay_ms(10u32));
@@ -202,34 +207,36 @@ mod app {
         }
     }
 
-    #[task(binds=EXTI0, local=[mpu6050], shared=[sensor])]
+    #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[sensor])]
     fn sensor_task(mut cx: sensor_task::Context) {
-        loop {
-            let len = cx.local.mpu6050.get_fifo_count().unwrap();
-            if len >= 28 {
-                // Grab newest from buffer
-                let mut buf = [0; 28];
-                let buf = cx.local.mpu6050.read_fifo(&mut buf).unwrap();
-                // Gyro
-                let quat = Quaternion::from_bytes(&buf[..16]).unwrap();
-                let ypr = YawPitchRoll::from(quat);
-                // Acceleration
-                let mut accelbytes: [u8; 6] = [0; 6];
-                accelbytes.copy_from_slice(&buf[16..22]);
-                let accel = Accel::from_bytes(accelbytes);
-                let accel_scaled = accel.scaled(accel::AccelFullScale::G4);
-                // store sensor input
-                cx.shared.sensor.lock(|s| {
-                    *s = SensorInput {
-                        pitch: ypr.pitch,
-                        yaw: ypr.yaw,
-                        roll: ypr.roll,
-                        accel_x: accel_scaled.x(),
-                        accel_y: accel_scaled.y(),
-                        accel_z: accel_scaled.z(),
-                    };
-                })
-            }
-        }
+        // Grab newest from buffer
+        let mut buf = [0; 28];
+        let buf = cx.local.mpu6050.read_fifo(&mut buf).unwrap();
+        // Gyro
+        let quat = Quaternion::from_bytes(&buf[..16]).unwrap();
+        let ypr = YawPitchRoll::from(quat);
+        // Acceleration
+        let mut accelbytes: [u8; 6] = [0; 6];
+        accelbytes.copy_from_slice(&buf[16..22]);
+
+        let accel = Accel::from_bytes(accelbytes);
+        let accel_scaled = accel.scaled(accel::AccelFullScale::G4);
+        // store sensor input
+        cx.shared.sensor.lock(|s| {
+            *s = SensorInput {
+                pitch: ypr.pitch,
+                yaw: ypr.yaw,
+                roll: ypr.roll,
+                accel_x: accel_scaled.x(),
+                accel_y: accel_scaled.y(),
+                accel_z: accel_scaled.z(),
+            };
+        });
+        debug!(
+            "data ready: y={:?} p={:?} r={:?}",
+            ypr.yaw, ypr.pitch, ypr.roll
+        );
+
+        cx.local.mpu6050_int.clear_interrupt_pending_bit();
     }
 }

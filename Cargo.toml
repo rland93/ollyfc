@@ -26,7 +26,7 @@ features = ["stm32f411", "rtic"]
 version = "0.17.1"
 
 [dependencies.mpu6050-dmp]
-version = "0.3.0"
+path = "../mpu6050-dmp-rs"
 
 [profile.dev]
 codegen-units = 1
