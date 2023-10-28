@@ -2,11 +2,57 @@
 #![no_main]
 #![no_std]
 #![feature(type_alias_impl_trait)]
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
 
+use defmt_rtt as _;
 use panic_probe as _;
+
+use defmt::{debug, info};
+
+// Crate
+use ollyfc::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
+use ollyfc::{sbus, w25q};
+
+// RTIC
+use rtic::Mutex;
+use rtic_monotonic::Monotonic;
+use rtic_monotonics::systick::Systick;
+use rtic_sync::{
+    channel::{Receiver, Sender},
+    make_channel,
+};
+
+// Sensor
+use mpu6050_dmp::{
+    accel::Accel, address::Address, config, quaternion::Quaternion, sensor::Mpu6050,
+    yaw_pitch_roll::YawPitchRoll,
+};
+
+// HAL
+use stm32f4xx_hal::{
+    dma::{StreamsTuple, Transfer},
+    gpio::{Edge, Output, Pin},
+    i2c::I2c,
+    pac::{DMA2, I2C2, SPI1, TIM10, TIM2, TIM4, TIM9, USART1},
+    prelude::*,
+    serial::{Config, Rx},
+    spi::{Mode, Phase, Polarity, Spi},
+    timer::{Delay, DelayUs, FTimer, MonoTimer},
+    {dma, serial},
+};
+
+// Constants
+const LOGDATA_CHAN_SIZE: usize = 128;
+const LOG_FREQUENCY_MS: u32 = 500; // 500 Hz
+const LOG_BUFF_SZ: usize = w25q::PAGE_SIZE as usize / LOG_SIZE;
+const SBUS_BUF_SZ: usize = 25;
+
+type SbusInTransfer = Transfer<
+    dma::StreamX<DMA2, 2>,
+    4,
+    Rx<USART1>,
+    dma::PeripheralToMemory,
+    &'static mut [u8; SBUS_BUF_SZ],
+>;
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5])]
 mod app {
@@ -58,6 +104,7 @@ mod app {
         &'static mut [u8; SBUS_BUF_SZ],
     >;
 
+    use super::*;
     #[shared]
     struct Shared {
         // Logging
@@ -172,13 +219,13 @@ mod app {
         info!("sbus in: dma...");
         let dma2 = StreamsTuple::new(cx.device.DMA2);
 
-        let sbus_in_buffer1 = cortex_m::singleton!(: [u8; 25] = [0; 25]).unwrap();
-        let sbus_in_buffer2 = cortex_m::singleton!(: [u8; 25] = [0; 25]).unwrap();
+        let sbus_in_buffer_A = cortex_m::singleton!(: [u8; 25] = [0; 25]).unwrap();
+        let sbus_in_buffer_B = cortex_m::singleton!(: [u8; 25] = [0; 25]).unwrap();
 
         let mut sbus_in_transfer: SbusInTransfer = Transfer::init_peripheral_to_memory(
             dma2.2,
             sbus_in,
-            sbus_in_buffer1,
+            sbus_in_buffer_A,
             None,
             dma::config::DmaConfig::default()
                 .memory_increment(true)
@@ -210,7 +257,7 @@ mod app {
                 log_grp_idx: 0,
                 mpu6050: mpu6050,
                 mpu6050_int,
-                sbus_rx_buffer: Some(sbus_in_buffer2),
+                sbus_rx_buffer: Some(sbus_in_buffer_B),
             },
         )
     }
@@ -279,7 +326,6 @@ mod app {
                     }
                 },
             };
-            debug!("Received a sensor data from queue.");
 
             let buf_idx = (*cx.local.log_grp_idx).clone() as usize;
             // store log data into the buffer
@@ -301,58 +347,59 @@ mod app {
 
     #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[sensor])]
     fn sensor_task(mut cx: sensor_task::Context) {
-        // Grab newest from buffer
-        let mut buf = [0; 28];
-        let buf = cx.local.mpu6050.read_fifo(&mut buf).unwrap();
-        // Gyro
-        let quat = Quaternion::from_bytes(&buf[..16]).unwrap();
-        let ypr = YawPitchRoll::from(quat);
-        // Acceleration
-        let mut accelbytes: [u8; 6] = [0; 6];
-        accelbytes.copy_from_slice(&buf[16..22]);
-
-        let accel = Accel::from_bytes(accelbytes);
-        let accel_scaled = accel.scaled(accel::AccelFullScale::G4);
-        // store sensor input
-        cx.shared.sensor.lock(|s| {
-            *s = SensorInput {
-                pitch: ypr.pitch,
-                yaw: ypr.yaw,
-                roll: ypr.roll,
-                accel_x: accel_scaled.x(),
-                accel_y: accel_scaled.y(),
-                accel_z: accel_scaled.z(),
-            };
-        });
-        /*
-        debug!(
-            "Grabbed a new sensor data from DMP: y={:?} p={:?} r={:?}",
-            ypr.yaw, ypr.pitch, ypr.roll
-        );
-        */
-
-        cx.local.mpu6050_int.clear_interrupt_pending_bit();
+        read_sensor_i2c(&mut cx);
     }
 
-    #[task(binds = DMA2_STREAM2, priority=2, shared = [sbus_rx_transfer], local = [sbus_rx_buffer])]
+    // TASK to read SBUS in over serial. Uses DMA.
+    #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer], local = [sbus_rx_buffer])]
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
-        cx.shared
-            .sbus_rx_transfer
-            .lock(|transfer: &mut SbusInTransfer| {
-                if transfer.is_idle() {
-                    // Allocate a new buffer
-                    let new_buf = cx.local.sbus_rx_buffer.take().unwrap();
-                    // Replace the new buffer with contents from the stream
-                    let (buffer, _current) = transfer.next_transfer(new_buf).unwrap();
-                    // TODO: send bytes to queue for processing
-                    let control: sbus::SbusChannels = sbus::SbusData::new(*buffer).parse();
-                    let control: sbus::FlightControls = control.get_input();
-
-                    debug!("Sbus: {:?}", control);
-
-                    // Free buffer
-                    *cx.local.sbus_rx_buffer = Some(buffer);
-                }
-            });
+        read_sbus_stream(&mut cx);
     }
+}
+
+fn read_sensor_i2c(cx: &mut app::sensor_task::Context) {
+    // Grab newest from buffer
+    let mut buf = [0; 28];
+    let buf = cx.local.mpu6050.read_fifo(&mut buf).unwrap();
+    // Gyro
+    let quat = Quaternion::from_bytes(&buf[..16]).unwrap();
+    let ypr = YawPitchRoll::from(quat);
+    // Acceleration
+    let mut accelbytes: [u8; 6] = [0; 6];
+    accelbytes.copy_from_slice(&buf[16..22]);
+
+    let accel = Accel::from_bytes(accelbytes);
+    let accel_scaled = accel.scaled(mpu6050_dmp::accel::AccelFullScale::G4);
+    // store sensor input
+    cx.shared.sensor.lock(|s| {
+        *s = SensorInput {
+            pitch: ypr.pitch,
+            yaw: ypr.yaw,
+            roll: ypr.roll,
+            accel_x: accel_scaled.x(),
+            accel_y: accel_scaled.y(),
+            accel_z: accel_scaled.z(),
+        };
+    });
+    cx.local.mpu6050_int.clear_interrupt_pending_bit();
+}
+
+fn read_sbus_stream(cx: &mut app::sbus_dma_stream::Context) {
+    cx.shared
+        .sbus_rx_transfer
+        .lock(|transfer: &mut SbusInTransfer| {
+            if transfer.is_idle() {
+                // Allocate a new buffer
+                let new_buf = cx.local.sbus_rx_buffer.take().unwrap();
+                // Replace the new buffer with contents from the stream
+                let (buffer, _current) = transfer.next_transfer(new_buf).unwrap();
+
+                let control: sbus::SbusChannels = sbus::SbusData::new(*buffer).parse();
+                let control: sbus::FlightControls = control.get_input();
+                // TODO: send FlightControls to shared object...
+                debug!("Sbus in: {:?}", control);
+                // Free buffer
+                *cx.local.sbus_rx_buffer = Some(buffer);
+            }
+        });
 }
