@@ -21,7 +21,7 @@ pub struct FlightControls {
 }
 
 impl SbusChannels {
-    pub fn get_channel(&self, channel: usize) -> u16 {
+    pub fn get_channel_by_no(&self, channel: usize) -> u16 {
         self.channels[channel - 1]
     }
 
@@ -39,13 +39,13 @@ impl SbusChannels {
 
     pub fn get_input(&self) -> FlightControls {
         FlightControls {
-            throttle: self.get_channel(1),
-            aileron: self.get_channel(2),
-            elevator: self.get_channel(3),
-            rudder: self.get_channel(4),
-            arm: self.get_channel(5) as u16,
-            enable: self.get_channel(6) as u16,
-            record: self.get_channel(7) as u16,
+            throttle: self.get_channel_by_no(1),
+            aileron: self.get_channel_by_no(2),
+            elevator: self.get_channel_by_no(3),
+            rudder: self.get_channel_by_no(4),
+            arm: self.get_channel_by_no(5) as u16,
+            enable: self.get_channel_by_no(6) as u16,
+            record: self.get_channel_by_no(7) as u16,
         }
     }
 }
@@ -56,16 +56,9 @@ impl SbusData {
     }
 
     pub fn parse(&self) -> SbusChannels {
-        let mut channels = [0u16; 16];
         let mut digital_channels = [false; 8];
 
-        channels[0] = ((self.raw[1] as u16 | (self.raw[2] as u16) << 8) & 0x07FF) as u16;
-        channels[1] = ((self.raw[2] as u16 >> 3 | (self.raw[3] as u16) << 5) & 0x07FF) as u16;
-        channels[2] =
-            ((self.raw[3] as u16 >> 6 | (self.raw[4] as u16) << 2 | (self.raw[5] as u16) << 10)
-                & 0x07FF) as u16;
-        channels[3] = ((self.raw[5] as u16 >> 1 | (self.raw[6] as u16) << 7) & 0x07FF) as u16;
-        // ... Continue for all 16 channels
+        let channels = parse_channels_from_raw(self.raw);
 
         for i in 0..8 {
             digital_channels[i] = (self.raw[23] >> i) & 0x01 != 0;
@@ -81,4 +74,30 @@ impl SbusData {
             failsafe_activated,
         }
     }
+}
+
+fn parse_channels_from_raw(raw: [u8; 25]) -> [u16; 16] {
+    let mut channels: [u16; 16] = [0; 16];
+    channels[0] = ((raw[1] as u16 | (raw[2] as u16) << 8) & 0x07FF) as u16;
+    channels[1] = ((raw[2] as u16 >> 3 | (raw[3] as u16) << 5) & 0x07FF) as u16;
+    channels[2] =
+        ((raw[3] as u16 >> 6 | (raw[4] as u16) << 2 | (raw[5] as u16) << 10) & 0x07FF) as u16;
+    channels[3] = ((raw[5] as u16 >> 1 | (raw[6] as u16) << 7) & 0x07FF) as u16;
+    channels[4] = ((raw[6] as u16 >> 4 | (raw[7] as u16) << 4) & 0x07FF) as u16;
+    channels[5] =
+        ((raw[7] as u16 >> 7 | (raw[8] as u16) << 1 | (raw[9] as u16) << 9) & 0x07FF) as u16;
+    channels[6] = ((raw[9] as u16 >> 2 | (raw[10] as u16) << 6) & 0x07FF) as u16;
+    channels[7] = ((raw[10] as u16 >> 5 | (raw[11] as u16) << 3) & 0x07FF) as u16;
+    channels[8] = ((raw[12] as u16 | (raw[13] as u16) << 8) & 0x07FF) as u16;
+    channels[9] = ((raw[13] as u16 >> 3 | (raw[14] as u16) << 5) & 0x07FF) as u16;
+    channels[10] =
+        ((raw[14] as u16 >> 6 | (raw[15] as u16) << 2 | (raw[16] as u16) << 10) & 0x07FF) as u16;
+    channels[11] = ((raw[16] as u16 >> 1 | (raw[17] as u16) << 7) & 0x07FF) as u16;
+    channels[12] = ((raw[17] as u16 >> 4 | (raw[18] as u16) << 4) & 0x07FF) as u16;
+    channels[13] =
+        ((raw[18] as u16 >> 7 | (raw[19] as u16) << 1 | (raw[20] as u16) << 9) & 0x07FF) as u16;
+    channels[14] = ((raw[20] as u16 >> 2 | (raw[21] as u16) << 6) & 0x07FF) as u16;
+    channels[15] = ((raw[21] as u16 >> 5 | (raw[22] as u16) << 3) & 0x07FF) as u16;
+
+    channels
 }

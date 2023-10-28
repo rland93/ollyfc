@@ -8,7 +8,7 @@
 
 use panic_probe as _;
 
-#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
+#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5])]
 mod app {
 
     use ollyfc::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
@@ -26,14 +26,18 @@ mod app {
         make_channel,
     };
 
+    use stm32f4xx_hal::serial::Config;
     use stm32f4xx_hal::timer::{FTimer, MonoTimer};
     use stm32f4xx_hal::{
-        gpio::{Edge, Output, Pin},
+        dma::{StreamsTuple, Transfer},
+        gpio::{Alternate, Edge, Output, Pin},
         i2c::I2c,
-        pac::{Interrupt, I2C2, SPI1, TIM10, TIM2, TIM4},
+        pac::{Interrupt, DMA2, I2C2, SPI1, TIM10, TIM2, TIM4, TIM9, USART1},
         prelude::*,
+        serial::{Event, Rx, Serial, Tx},
         spi::{Mode, Phase, Polarity, Spi},
         timer::{Delay, DelayMs, DelayUs, SysCounterHz, Timer, Timer2},
+        {dma, serial},
     };
 
     use mpu6050_dmp::{
@@ -44,13 +48,26 @@ mod app {
     const LOGDATA_CHAN_SIZE: usize = 128;
     const LOG_FREQUENCY_MS: u32 = 500; // 500 Hz
     const LOG_BUFF_SZ: usize = w25q::PAGE_SIZE as usize / LOG_SIZE;
+    const SBUS_BUF_SZ: usize = 25;
+
+    type SbusInTransfer = Transfer<
+        dma::StreamX<DMA2, 2>,
+        4,
+        Rx<USART1>,
+        dma::PeripheralToMemory,
+        &'static mut [u8; SBUS_BUF_SZ],
+    >;
+
     #[shared]
     struct Shared {
         // Logging
         timer10: Delay<TIM10, 1000>,
-        log_timer: MonoTimer<TIM2, 1_000>,
+        timer2: MonoTimer<TIM2, 1_000>,
+        timer9: DelayUs<TIM9>,
         sensor: SensorInput,
         sbus: SBusInput,
+        // Serial
+        sbus_rx_transfer: SbusInTransfer,
     }
 
     #[local]
@@ -62,6 +79,8 @@ mod app {
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
         mpu6050: Mpu6050<I2c<I2C2>>,
         mpu6050_int: Pin<'B', 8>,
+        // Sbus In
+        sbus_rx_buffer: Option<&'static mut [u8; SBUS_BUF_SZ]>,
     }
 
     #[init]
@@ -99,12 +118,9 @@ mod app {
         let mem = w25q::W25Q::new(spi1, spi1_cs, timer);
 
         debug!("logging...");
-        let log_timer: MonoTimer<TIM2, 1000> = FTimer::new(cx.device.TIM2, &clocks).monotonic();
         let log_delay: Delay<TIM4, 1000> = cx.device.TIM4.delay(&clocks);
 
         let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
-        log_collect_task::spawn(log_ch_s.clone()).unwrap();
-        log_write_task::spawn(log_ch_r).unwrap();
 
         debug!("mpu6050...");
         // Configure pin for interrupt on data ready
@@ -131,15 +147,61 @@ mod app {
         mpu6050
             .set_digital_lowpass_filter(config::DigitalLowPassFilter::Filter2)
             .unwrap();
-
+        // interrupt enable on mpu6050
+        mpu6050.disable_interrupts().unwrap();
         mpu6050.interrupt_fifo_oflow_en().unwrap();
+
+        let timer2: MonoTimer<TIM2, 1_000> = FTimer::new(cx.device.TIM2, &clocks).monotonic();
+
+        // Sbus In: receiving flight commands
+        debug!("sbus in: serial...");
+        let mut sbus_in: Rx<USART1, u8> = cx
+            .device
+            .USART1
+            .rx(
+                gpioa.pa10.into_alternate(),
+                Config::default()
+                    .baudrate(100_000.bps())
+                    .dma(serial::config::DmaConfig::Rx),
+                &clocks,
+            )
+            .unwrap();
+        sbus_in.listen_idle();
+
+        // Sbus In:  DMA stream
+        info!("sbus in: dma...");
+        let dma2 = StreamsTuple::new(cx.device.DMA2);
+
+        let sbus_in_buffer1 = cortex_m::singleton!(: [u8; 25] = [0; 25]).unwrap();
+        let sbus_in_buffer2 = cortex_m::singleton!(: [u8; 25] = [0; 25]).unwrap();
+
+        let mut sbus_in_transfer: SbusInTransfer = Transfer::init_peripheral_to_memory(
+            dma2.2,
+            sbus_in,
+            sbus_in_buffer1,
+            None,
+            dma::config::DmaConfig::default()
+                .memory_increment(true)
+                .fifo_enable(true)
+                .fifo_error_interrupt(true)
+                .transfer_complete_interrupt(true),
+        );
+        sbus_in_transfer.start(|_rx| {});
+
+        // Misc
+        let timer9: Delay<TIM9, 1_000_000> = cx.device.TIM9.delay_us(&clocks);
+
+        // log_collect_task::spawn(log_ch_s.clone()).unwrap();
+        // log_write_task::spawn(log_ch_r).unwrap();
 
         (
             Shared {
                 timer10: cx.device.TIM10.delay(&clocks),
-                log_timer,
+                timer2: timer2,
+                timer9: timer9,
                 sensor: SensorInput::default(),
                 sbus: SBusInput::default(),
+                sbus_rx_transfer: sbus_in_transfer,
             },
             Local {
                 flight_logger: FlightLogger::new(mem),
@@ -148,46 +210,76 @@ mod app {
                 log_grp_idx: 0,
                 mpu6050: mpu6050,
                 mpu6050_int,
+                sbus_rx_buffer: Some(sbus_in_buffer2),
             },
         )
     }
 
-    #[task(local=[flight_logger, log_delay], shared=[log_timer, sensor, sbus])]
+    #[idle]
+    fn idle(cx: idle::Context) -> ! {
+        loop {
+            // nop
+            cortex_m::asm::nop();
+        }
+    }
+
+    #[task(priority = 2, shared=[timer9])]
+    async fn primary_flight_loop_task(mut cx: primary_flight_loop_task::Context) {
+        loop {
+            cx.shared.timer9.lock(|timer| {
+                timer.delay_us(1_000u32);
+            });
+            debug!("Primary flight loop task");
+        }
+    }
+
+    #[task(local=[flight_logger, log_delay], shared=[sensor, sbus, timer2], priority=1)]
     async fn log_collect_task(
         mut cx: log_collect_task::Context,
         mut log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
         cx.local.flight_logger.init(w25q::BLOCK_32K_SIZE as u32);
-        loop {
-            // get current time and sensor values
-            let now = cx
-                .shared
-                .log_timer
-                .lock(|timer: &mut MonoTimer<TIM2, 1000>| timer.now());
-            let sensor = cx.shared.sensor.lock(|sensor| sensor.clone());
-            let sbus = cx.shared.sbus.lock(|sbus| sbus.clone());
-            let log_data = FlightLogData {
-                timestamp: now.ticks(),
-                sbus_input: sbus,
-                sensor_input: sensor,
-            };
-
-            // send log onto the queue
-            log_ch_s.send(log_data).await.unwrap();
-
-            // delay the task
-            cx.local.log_delay.delay_ms(LOG_FREQUENCY_MS);
-        }
+        // get current time and sensor values
+        let now = cx
+            .shared
+            .timer2
+            .lock(|timer: &mut MonoTimer<TIM2, 1_000>| timer.now());
+        let sensor = cx.shared.sensor.lock(|sensor| sensor.clone());
+        let sbus = cx.shared.sbus.lock(|sbus| sbus.clone());
+        let log_data = FlightLogData {
+            timestamp: now.ticks(),
+            sbus_input: sbus,
+            sensor_input: sensor,
+        };
+        debug!(
+            "Sent a log data to queue. Sensor: {:?} {:?} {:?}",
+            sensor.roll, sensor.pitch, sensor.yaw
+        );
+        // send log onto the queue
+        log_ch_s.send(log_data).await.unwrap();
     }
 
-    #[task(local=[log_grp_idx, log_buffer], shared=[timer10])]
+    #[task(local=[log_grp_idx, log_buffer], shared=[timer10], priority=1)]
     async fn log_write_task(
         mut cx: log_write_task::Context,
         mut log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
         loop {
             // wait to get a new log
-            let log_data = log_ch_r.recv().await.unwrap();
+            let log_data = match log_ch_r.recv().await {
+                Ok(data) => data,
+                Err(e) => match e {
+                    rtic_sync::channel::ReceiveError::NoSender => {
+                        debug!("No sender.");
+                        continue;
+                    }
+                    rtic_sync::channel::ReceiveError::Empty => {
+                        debug!("Empty queue.");
+                        continue;
+                    }
+                },
+            };
+            debug!("Received a sensor data from queue.");
 
             let buf_idx = (*cx.local.log_grp_idx).clone() as usize;
             // store log data into the buffer
@@ -232,11 +324,35 @@ mod app {
                 accel_z: accel_scaled.z(),
             };
         });
+        /*
         debug!(
-            "data ready: y={:?} p={:?} r={:?}",
+            "Grabbed a new sensor data from DMP: y={:?} p={:?} r={:?}",
             ypr.yaw, ypr.pitch, ypr.roll
         );
+        */
 
         cx.local.mpu6050_int.clear_interrupt_pending_bit();
+    }
+
+    #[task(binds = DMA2_STREAM2, priority=2, shared = [sbus_rx_transfer], local = [sbus_rx_buffer])]
+    fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
+        cx.shared
+            .sbus_rx_transfer
+            .lock(|transfer: &mut SbusInTransfer| {
+                if transfer.is_idle() {
+                    // Allocate a new buffer
+                    let new_buf = cx.local.sbus_rx_buffer.take().unwrap();
+                    // Replace the new buffer with contents from the stream
+                    let (buffer, _current) = transfer.next_transfer(new_buf).unwrap();
+                    // TODO: send bytes to queue for processing
+                    let control: sbus::SbusChannels = sbus::SbusData::new(*buffer).parse();
+                    let control: sbus::FlightControls = control.get_input();
+
+                    debug!("Sbus: {:?}", control);
+
+                    // Free buffer
+                    *cx.local.sbus_rx_buffer = Some(buffer);
+                }
+            });
     }
 }
