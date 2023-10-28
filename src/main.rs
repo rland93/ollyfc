@@ -14,6 +14,8 @@ mod app {
     use defmt_rtt as _;
     use fc2::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
     use fc2::w25q;
+    use ollyfc::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
+    use ollyfc::{sbus, w25q};
     use rtic_monotonic::Monotonic;
     use rtic_monotonics::systick::Systick;
 

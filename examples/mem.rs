@@ -10,7 +10,7 @@ mod app {
     use defmt::info;
     use defmt_rtt as _;
 
-    use fc2::w25q;
+    use ollyfc::w25q;
     use rtic_monotonics::systick::Systick;
 
     use stm32f4xx_hal::{
