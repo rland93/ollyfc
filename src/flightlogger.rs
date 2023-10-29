@@ -1,4 +1,4 @@
-use defmt::{debug, error};
+use defmt::{debug, error, Format};
 
 use crate::sbus::FlightControls;
 use crate::w25q::{FlashMem, MemError};
@@ -47,7 +47,7 @@ impl<T: FlashMem> FlightLogger<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Format)]
 pub struct SensorInput {
     pub accel_x: f32,
     pub accel_y: f32,
@@ -69,7 +69,7 @@ impl SensorInput {
         }
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Format)]
 pub struct SBusInput {
     pub throttle: u16,
     pub aileron: u16,
@@ -106,7 +106,7 @@ impl SBusInput {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Format)]
 pub struct FlightLogData {
     pub timestamp: u32,
     pub sbus_input: SBusInput,

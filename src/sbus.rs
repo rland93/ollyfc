@@ -9,7 +9,7 @@ pub struct SbusChannels {
     failsafe_activated: bool,
 }
 
-#[derive(defmt::Format)]
+#[derive(defmt::Format, Clone)]
 pub struct FlightControls {
     pub throttle: u16,
     pub aileron: u16,
@@ -18,6 +18,20 @@ pub struct FlightControls {
     pub arm: u16,
     pub enable: u16,
     pub record: u16,
+}
+
+impl FlightControls {
+    pub fn default() -> Self {
+        Self {
+            throttle: 0,
+            aileron: 0,
+            elevator: 0,
+            rudder: 0,
+            arm: 0,
+            enable: 0,
+            record: 0,
+        }
+    }
 }
 
 impl SbusChannels {
