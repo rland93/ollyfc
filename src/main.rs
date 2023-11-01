@@ -2,15 +2,17 @@
 #![no_main]
 #![no_std]
 #![feature(type_alias_impl_trait)]
+#![feature(generic_arg_infer)]
 
 use defmt_rtt as _;
+use ollyfc::w25q::W25Q;
 use panic_probe as _;
 
 use defmt::{debug, info};
 
 // Crate
 use ollyfc::flight_control::ControlPolicy;
-use ollyfc::flight_logger::{FlightLogData, FlightLogger, SBusInput, SensorInput};
+use ollyfc::flight_logger::{FlightLogData, SBusInput, SensorInput};
 use ollyfc::{sbus, w25q};
 
 // RTIC
@@ -22,6 +24,9 @@ use rtic_sync::{
     make_channel,
 };
 
+use stm32f4xx_hal::gpio::{Alternate, Edge, Input, OpenDrain};
+use stm32f4xx_hal::{i2c, pac, rcc, syscfg};
+
 // Sensor
 use mpu6050_dmp::{
     accel::Accel, address::Address, config, quaternion::Quaternion, sensor::Mpu6050,
@@ -31,15 +36,14 @@ use mpu6050_dmp::{
 // HAL
 use stm32f4xx_hal::{
     dma::{StreamsTuple, Transfer},
-    gpio::{Edge, Output, Pin},
-    i2c::I2c,
-    pac::{DMA2, I2C2, SPI1, USART1},
-    pac::{TIM1, TIM2, TIM3, TIM4, TIM5, TIM8},
+    gpio::{Output, Pin},
+    pac::TIM3,
+    pac::{DMA2, I2C2, USART1},
     prelude::*,
     serial::{Config, Rx},
     spi::{Mode, Phase, Polarity, Spi},
-    timer::{Channel2, Channel3, PwmChannel},
-    timer::{Delay, FTimer, MonoTimer},
+    timer::Delay,
+    timer::{Channel3, PwmChannel},
     {dma, serial},
 };
 
@@ -121,9 +125,8 @@ mod app {
         elevator_channel: PwmChannel<TIM3, 2>,
         // Logging
         log_grp_idx: u8,
-        flight_logger: FlightLogger<w25q::W25Q>,
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
-        mpu6050: Mpu6050<I2c<I2C2>>,
+        mpu6050: Mpu6050<i2c::I2c<I2C2>>,
         mpu6050_int: Pin<'B', 8>,
         // Sbus In
         sbus_rx_buffer: Option<&'static mut [u8; SBUS_BUF_SZ]>,
@@ -137,67 +140,44 @@ mod app {
         let systick_mono_token = rtic_monotonics::create_systick_token!();
         Systick::start(cx.core.SYST, 64_000_000, systick_mono_token);
         let clocks = rcc.cfgr.sysclk(64.MHz()).freeze();
-        info!("Booted. Initializing...");
 
-        info!("Peripherals...");
-        debug!("gpio...");
-        // Peripherals
         let gpiob = cx.device.GPIOB.split();
         let gpioa = cx.device.GPIOA.split();
 
-        debug!("spi1, mem...");
-        let mem = w25q::W25Q::new(
-            Spi::new(
-                cx.device.SPI1,
-                (
-                    gpioa.pa5.into_alternate(),
-                    gpioa.pa6.into_alternate(),
-                    gpioa.pa7.into_alternate(),
-                ),
-                Mode {
-                    polarity: Polarity::IdleLow,
-                    phase: Phase::CaptureOnFirstTransition,
-                },
-                100.kHz(),
-                &clocks,
-            ),
+        // Flash memory
+        let mem = mem_init(
             gpioa.pa4.into_push_pull_output(),
-            cx.device.TIM1.delay_us(&clocks),
+            gpioa.pa5.into_alternate(),
+            gpioa.pa6.into_alternate(),
+            gpioa.pa7.into_alternate(),
+            cx.device.SPI1,
+            cx.device.TIM1,
+            &clocks,
         );
 
-        debug!("logging...");
+        // Gyroscope
+        let mut mpu_int = gpiob.pb8.into_pull_down_input();
+        let mpu = mpu_6050_init(
+            &mut mpu_int,
+            gpiob
+                .pb10
+                .into_alternate()
+                .internal_pull_up(true)
+                .set_open_drain(),
+            gpiob
+                .pb11
+                .into_alternate()
+                .internal_pull_up(true)
+                .set_open_drain(),
+            cx.device.I2C2,
+            &mut cx.device.EXTI,
+            &mut syscfg,
+            &clocks,
+            &mut cx.device.TIM2.delay_us(&clocks),
+        );
 
+        // Channel for log data
         let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
-
-        debug!("mpu6050...");
-        // Configure pin for interrupt on data ready
-        let mut mpu6050_int = gpiob.pb8.into_pull_down_input();
-        mpu6050_int.make_interrupt_source(&mut syscfg);
-        mpu6050_int.trigger_on_edge(&mut cx.device.EXTI, Edge::Falling);
-        mpu6050_int.enable_interrupt(&mut cx.device.EXTI);
-
-        let mut delay_tim5 = cx.device.TIM2.delay_us(&clocks);
-        let i2c2_sda = gpiob
-            .pb9
-            .into_alternate()
-            .internal_pull_up(true)
-            .set_open_drain();
-        let i2c2_scl = gpiob
-            .pb10
-            .into_alternate()
-            .internal_pull_up(true)
-            .set_open_drain();
-        let i2c2 = cx.device.I2C2.i2c((i2c2_scl, i2c2_sda), 400.kHz(), &clocks);
-        let mut mpu6050: Mpu6050<I2c<I2C2>> = Mpu6050::new(i2c2, Address::default()).unwrap();
-        debug!("init dmp...");
-        mpu6050.initialize_dmp(&mut delay_tim5).unwrap();
-        mpu6050.enable_fifo().unwrap();
-        mpu6050
-            .set_digital_lowpass_filter(config::DigitalLowPassFilter::Filter2)
-            .unwrap();
-        // interrupt enable on mpu6050
-        mpu6050.disable_interrupts().unwrap();
-        mpu6050.interrupt_fifo_oflow_en().unwrap();
 
         // Sbus In: receiving flight commands
         debug!("sbus in: serial...");
@@ -258,18 +238,17 @@ mod app {
             },
             Local {
                 elevator_channel: elevator_channel,
-                flight_logger: FlightLogger::new(mem),
                 log_buffer: [FlightLogData::default(); LOG_BUFF_SZ],
                 log_grp_idx: 0,
-                mpu6050: mpu6050,
-                mpu6050_int,
+                mpu6050: mpu,
+                mpu6050_int: mpu_int,
                 sbus_rx_buffer: Some(sbus_in_buffer_B),
             },
         )
     }
 
     #[idle]
-    fn idle(cx: idle::Context) -> ! {
+    fn idle(_cx: idle::Context) -> ! {
         loop {
             // nop
             rtic::export::wfi();
@@ -278,16 +257,16 @@ mod app {
 
     #[task(priority = 3, shared=[flight_controls, gyro], local=[elevator_channel])]
     async fn primary_flight_loop_task(
-        mut cx: primary_flight_loop_task::Context,
-        mut log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
+        cx: primary_flight_loop_task::Context,
+        log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
         flight_loop(cx, log_ch_s).await;
     }
 
     #[task(local=[log_grp_idx, log_buffer], priority=1)]
     async fn log_write_task(
-        mut cx: log_write_task::Context,
-        mut log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
+        cx: log_write_task::Context,
+        log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
         log_write(cx, log_ch_r).await;
     }
@@ -301,6 +280,53 @@ mod app {
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
         read_sbus_stream(&mut cx);
     }
+}
+
+fn mpu_6050_init(
+    interrupt: &mut Pin<'B', 8, Input>,
+    scl: Pin<'B', 10, Alternate<4, OpenDrain>>,
+    sda: Pin<'B', 11, Alternate<4, OpenDrain>>,
+    i2c2: pac::I2C2,
+    exti: &mut pac::EXTI,
+    syscfg: &mut syscfg::SysCfg,
+    clocks: &rcc::Clocks,
+    delay: &mut Delay<pac::TIM2, 1000000>,
+) -> Mpu6050<i2c::I2c<pac::I2C2>> {
+    // Configure pin for interrupt on data ready
+    interrupt.make_interrupt_source(syscfg);
+    interrupt.trigger_on_edge(exti, Edge::Falling);
+    interrupt.enable_interrupt(exti);
+    let i2c_dev = i2c2.i2c((scl, sda), 400.kHz(), &clocks);
+
+    let mut mpu6050: Mpu6050<i2c::I2c<pac::I2C2>> =
+        Mpu6050::new(i2c_dev, Address::default()).unwrap();
+
+    // digitql motion processor
+    mpu6050.initialize_dmp(delay).unwrap();
+    mpu6050.enable_fifo().unwrap();
+    mpu6050
+        .set_digital_lowpass_filter(config::DigitalLowPassFilter::Filter2)
+        .unwrap();
+    mpu6050.disable_interrupts().unwrap();
+    mpu6050.interrupt_fifo_oflow_en().unwrap();
+    mpu6050
+}
+
+fn mem_init(
+    cs: Pin<'A', 4, Output>,
+    sck: Pin<'A', 5, Alternate<5>>,
+    miso: Pin<'A', 6, Alternate<5>>,
+    mosi: Pin<'A', 7, Alternate<5>>,
+    spi: pac::SPI1,
+    tim: pac::TIM1,
+    clocks: &rcc::Clocks,
+) -> W25Q {
+    let mode = Mode {
+        polarity: Polarity::IdleLow,
+        phase: Phase::CaptureOnFirstTransition,
+    };
+    let spi = Spi::new(spi, (sck, miso, mosi), mode, 100.kHz(), clocks);
+    w25q::W25Q::new(spi, cs, tim.delay_us(&clocks))
 }
 
 async fn flight_loop(
@@ -370,11 +396,11 @@ async fn flight_loop(
 }
 
 async fn log_write(
-    mut cx: app::log_write_task::Context<'_>,
+    mut _cx: app::log_write_task::Context<'_>,
     mut log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
 ) {
     loop {
-        let data = match log_ch_r.recv().await {
+        let _data = match log_ch_r.recv().await {
             Ok(data) => data,
             Err(e) => match e {
                 rtic_sync::channel::ReceiveError::NoSender => {
