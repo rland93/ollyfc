@@ -1,5 +1,6 @@
 use defmt::{debug, error, Format};
 
+use crate::flight_control::ControlPolicy;
 use crate::sbus::FlightControls;
 use crate::w25q::{FlashMem, MemError};
 
@@ -111,6 +112,7 @@ pub struct FlightLogData {
     pub timestamp: u32,
     pub sbus_input: SBusInput,
     pub sensor_input: SensorInput,
+    pub control_policy: ControlPolicy,
 }
 
 impl FlightLogData {
@@ -137,6 +139,12 @@ impl FlightLogData {
         bytes[38..42].copy_from_slice(&self.sensor_input.yaw.to_be_bytes());
         bytes[42..46].copy_from_slice(&self.sensor_input.roll.to_be_bytes());
 
+        // control policy
+        bytes[46..48].copy_from_slice(&self.control_policy.elevator.to_be_bytes());
+        bytes[48..50].copy_from_slice(&self.control_policy.aileron.to_be_bytes());
+        bytes[50..52].copy_from_slice(&self.control_policy.rudder.to_be_bytes());
+        bytes[52..54].copy_from_slice(&self.control_policy.throttle.to_be_bytes());
+
         bytes
     }
 
@@ -145,6 +153,7 @@ impl FlightLogData {
             timestamp: 0,
             sbus_input: SBusInput::default(),
             sensor_input: SensorInput::default(),
+            control_policy: ControlPolicy::default(),
         }
     }
 }

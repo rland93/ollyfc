@@ -3,7 +3,7 @@
 use defmt::Format;
 use stm32f4xx_hal::{
     gpio::{Output, Pin, PushPull},
-    pac::{SPI1, TIM3},
+    pac::{SPI1, TIM1},
     prelude::*,
     spi::{Error as SpiE, Spi},
     timer::Delay,
@@ -157,11 +157,11 @@ pub trait FlashMem {
 pub struct W25Q {
     spi: Spi<SPI1>,
     cs: Pin<'A', 4, Output<PushPull>>,
-    pub timer: Delay<TIM3, 1000000>,
+    pub timer: Delay<TIM1, 1000000>,
 }
 
 impl W25Q {
-    pub fn new(spi: Spi<SPI1>, cs: Pin<'A', 4, Output>, timer: Delay<TIM3, 1000000>) -> Self {
+    pub fn new(spi: Spi<SPI1>, cs: Pin<'A', 4, Output>, timer: Delay<TIM1, 1000000>) -> Self {
         Self { spi, cs, timer }
     }
 
