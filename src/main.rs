@@ -281,66 +281,7 @@ mod app {
         mut cx: primary_flight_loop_task::Context,
         mut log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
-        loop {
-            let now = Systick::now();
-            // Flight Controls
-            let controls = cx
-                .shared
-                .flight_controls
-                .lock(|fc: &mut sbus::FlightControls| fc.clone());
-            let arm_mode = switch_mode(controls.arm);
-            let enable_mode = switch_mode(controls.enable);
-            let record_mode = switch_mode(controls.record);
-
-            // Sensor
-            let gyro = cx.shared.gyro.lock(|g: &mut SensorInput| g.clone());
-
-            // control policies
-            let ele = elevator_ctl(controls.elevator, arm_mode);
-            let ail = aileron_ctl(controls.aileron);
-            let rud = rudder_ctl(controls.rudder);
-            let thr = throttle_ctl(controls.throttle);
-
-            // Send data to logger
-            let log_data = FlightLogData {
-                timestamp: 0,
-                sbus_input: SBusInput {
-                    throttle: controls.throttle,
-                    aileron: controls.aileron,
-                    elevator: controls.elevator,
-                    rudder: controls.rudder,
-                    arm: arm_mode as u16,
-                    enable: enable_mode as u16,
-                    record: record_mode as u16,
-                },
-                sensor_input: SensorInput {
-                    pitch: gyro.pitch,
-                    yaw: gyro.yaw,
-                    roll: gyro.roll,
-                    accel_x: gyro.accel_x,
-                    accel_y: gyro.accel_y,
-                    accel_z: gyro.accel_z,
-                },
-                control_policy: ControlPolicy {
-                    elevator: ele,
-                    aileron: ail,
-                    rudder: rud,
-                    throttle: thr,
-                },
-            };
-            if !log_ch_s.is_full() {
-                if let Err(_e) = log_ch_s.send(log_data).await {
-                    debug!("Error sending log data: No reciever.");
-                }
-            } else {
-                debug!("Log channel full.");
-            }
-
-            let duty = scale_servo(ele, cx.local.elevator_channel.get_max_duty());
-            cx.local.elevator_channel.set_duty(duty);
-
-            Systick::delay_until(now + 20.millis()).await;
-        }
+        flight_loop(cx, log_ch_s).await;
     }
 
     #[task(local=[log_grp_idx, log_buffer], priority=1)]
@@ -348,23 +289,7 @@ mod app {
         mut cx: log_write_task::Context,
         mut log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
-        loop {
-            // wait to get a new log
-            let log_data = match log_ch_r.recv().await {
-                Ok(data) => data,
-                Err(e) => match e {
-                    rtic_sync::channel::ReceiveError::NoSender => {
-                        debug!("No sender.");
-                        continue;
-                    }
-                    rtic_sync::channel::ReceiveError::Empty => {
-                        debug!("Empty queue.");
-                        continue;
-                    }
-                },
-            };
-            info!("got new log.");
-        }
+        log_write(cx, log_ch_r).await;
     }
 
     #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]
@@ -372,10 +297,97 @@ mod app {
         read_sensor_i2c(&mut cx);
     }
 
-    // TASK to read SBUS in over serial. Uses DMA.
     #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer, flight_controls], local = [sbus_rx_buffer])]
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
         read_sbus_stream(&mut cx);
+    }
+}
+
+async fn flight_loop(
+    mut cx: app::primary_flight_loop_task::Context<'_>,
+    mut log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
+) {
+    loop {
+        let now = Systick::now();
+        // Flight Controls
+        let controls = cx
+            .shared
+            .flight_controls
+            .lock(|fc: &mut sbus::FlightControls| fc.clone());
+        let arm_mode = switch_mode(controls.arm);
+        let enable_mode = switch_mode(controls.enable);
+        let record_mode = switch_mode(controls.record);
+
+        // Sensor
+        let gyro = cx.shared.gyro.lock(|g: &mut SensorInput| g.clone());
+
+        // control policies
+        let ele = elevator_ctl(controls.elevator, arm_mode);
+        let ail = aileron_ctl(controls.aileron);
+        let rud = rudder_ctl(controls.rudder);
+        let thr = throttle_ctl(controls.throttle);
+
+        // Send data to logger
+        let log_data = FlightLogData {
+            timestamp: 0,
+            sbus_input: SBusInput {
+                throttle: controls.throttle,
+                aileron: controls.aileron,
+                elevator: controls.elevator,
+                rudder: controls.rudder,
+                arm: arm_mode as u16,
+                enable: enable_mode as u16,
+                record: record_mode as u16,
+            },
+            sensor_input: SensorInput {
+                pitch: gyro.pitch,
+                yaw: gyro.yaw,
+                roll: gyro.roll,
+                accel_x: gyro.accel_x,
+                accel_y: gyro.accel_y,
+                accel_z: gyro.accel_z,
+            },
+            control_policy: ControlPolicy {
+                elevator: ele,
+                aileron: ail,
+                rudder: rud,
+                throttle: thr,
+            },
+        };
+        if !log_ch_s.is_full() {
+            if let Err(_e) = log_ch_s.send(log_data).await {
+                debug!("Error sending log data: No reciever.");
+            }
+        } else {
+            debug!("Log channel full.");
+        }
+
+        let duty = scale_servo(ele, cx.local.elevator_channel.get_max_duty());
+        cx.local.elevator_channel.set_duty(duty);
+
+        Systick::delay_until(now + 20.millis()).await;
+    }
+}
+
+async fn log_write(
+    mut cx: app::log_write_task::Context<'_>,
+    mut log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
+) {
+    loop {
+        let data = match log_ch_r.recv().await {
+            Ok(data) => data,
+            Err(e) => match e {
+                rtic_sync::channel::ReceiveError::NoSender => {
+                    debug!("No sender.");
+                    continue;
+                }
+                rtic_sync::channel::ReceiveError::Empty => {
+                    debug!("Empty queue.");
+                    continue;
+                }
+            },
+        };
+        debug!("TODO: Write to flash");
     }
 }
 
