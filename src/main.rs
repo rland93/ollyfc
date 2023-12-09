@@ -38,7 +38,7 @@ use stm32f4xx_hal::{
     dma::{StreamsTuple, Transfer},
     gpio::{Output, Pin},
     pac::TIM3,
-    pac::{DMA2, I2C2, USART1},
+    pac::{DMA2, I2C1, USART1},
     prelude::*,
     serial::{Config, Rx},
     spi::{Mode, Phase, Polarity, Spi},
@@ -63,53 +63,6 @@ type SbusInTransfer = Transfer<
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5])]
 mod app {
 
-    use ollyfc::flightlogger::{FlightLogData, FlightLogger, SBusInput, SensorInput, LOG_SIZE};
-    use ollyfc::{sbus, w25q};
-
-    use defmt::{debug, info};
-    use defmt_rtt as _;
-
-    use mpu6050_dmp::accel;
-
-    use rtic_monotonic::Monotonic;
-    use rtic_monotonics::systick::Systick;
-    use rtic_sync::{
-        channel::{Receiver, Sender},
-        make_channel,
-    };
-
-    use stm32f4xx_hal::serial::Config;
-    use stm32f4xx_hal::timer::{FTimer, MonoTimer};
-    use stm32f4xx_hal::{
-        dma::{StreamsTuple, Transfer},
-        gpio::{Alternate, Edge, Output, Pin},
-        i2c::I2c,
-        pac::{Interrupt, DMA2, I2C2, SPI1, TIM10, TIM2, TIM4, TIM9, USART1},
-        prelude::*,
-        serial::{Event, Rx, Serial, Tx},
-        spi::{Mode, Phase, Polarity, Spi},
-        timer::{Delay, DelayMs, DelayUs, SysCounterHz, Timer, Timer2},
-        {dma, serial},
-    };
-
-    use mpu6050_dmp::{
-        accel::Accel, address::Address, config, quaternion::Quaternion, registers, sensor::Mpu6050,
-        yaw_pitch_roll::YawPitchRoll,
-    };
-
-    const LOGDATA_CHAN_SIZE: usize = 128;
-    const LOG_FREQUENCY_MS: u32 = 500; // 500 Hz
-    const LOG_BUFF_SZ: usize = w25q::PAGE_SIZE as usize / LOG_SIZE;
-    const SBUS_BUF_SZ: usize = 25;
-
-    type SbusInTransfer = Transfer<
-        dma::StreamX<DMA2, 2>,
-        4,
-        Rx<USART1>,
-        dma::PeripheralToMemory,
-        &'static mut [u8; SBUS_BUF_SZ],
-    >;
-
     use super::*;
     #[shared]
     struct Shared {
@@ -126,7 +79,7 @@ mod app {
         // Logging
         log_grp_idx: u8,
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
-        mpu6050: Mpu6050<i2c::I2c<I2C2>>,
+        mpu6050: Mpu6050<i2c::I2c<I2C1>>,
         mpu6050_int: Pin<'B', 8>,
         // Sbus In
         sbus_rx_buffer: Option<&'static mut [u8; SBUS_BUF_SZ]>,
@@ -160,16 +113,16 @@ mod app {
         let mpu = mpu_6050_init(
             &mut mpu_int,
             gpiob
-                .pb10
+                .pb6
                 .into_alternate()
                 .internal_pull_up(true)
                 .set_open_drain(),
             gpiob
-                .pb11
+                .pb7
                 .into_alternate()
                 .internal_pull_up(true)
                 .set_open_drain(),
-            cx.device.I2C2,
+            cx.device.I2C1,
             &mut cx.device.EXTI,
             &mut syscfg,
             &clocks,
@@ -250,7 +203,10 @@ mod app {
     #[idle]
     fn idle(_cx: idle::Context) -> ! {
         loop {
-            // nop
+            // wait for interrupt. This will put cortex_m to a low power mode
+            // until an interrupt occurs. Since RTIC uses hardware interrupt
+            // for scheduling, this basically sleeps until the next task is
+            // ready to run.
             rtic::export::wfi();
         }
     }
@@ -284,24 +240,22 @@ mod app {
 
 fn mpu_6050_init(
     interrupt: &mut Pin<'B', 8, Input>,
-    scl: Pin<'B', 10, Alternate<4, OpenDrain>>,
-    sda: Pin<'B', 11, Alternate<4, OpenDrain>>,
-    i2c2: pac::I2C2,
+    scl: Pin<'B', 6, Alternate<4, OpenDrain>>,
+    sda: Pin<'B', 7, Alternate<4, OpenDrain>>,
+    i2c1: pac::I2C1,
     exti: &mut pac::EXTI,
     syscfg: &mut syscfg::SysCfg,
     clocks: &rcc::Clocks,
     delay: &mut Delay<pac::TIM2, 1000000>,
-) -> Mpu6050<i2c::I2c<pac::I2C2>> {
+) -> Mpu6050<i2c::I2c<pac::I2C1>> {
     // Configure pin for interrupt on data ready
     interrupt.make_interrupt_source(syscfg);
     interrupt.trigger_on_edge(exti, Edge::Falling);
     interrupt.enable_interrupt(exti);
-    let i2c_dev = i2c2.i2c((scl, sda), 400.kHz(), &clocks);
-
-    let mut mpu6050: Mpu6050<i2c::I2c<pac::I2C2>> =
-        Mpu6050::new(i2c_dev, Address::default()).unwrap();
-
-    // digitql motion processor
+    let i2c_dev = i2c1.i2c((scl, sda), 400.kHz(), &clocks);
+    let mut mpu6050: Mpu6050<i2c::I2c<pac::I2C1>> =
+        Mpu6050::new(i2c_dev, Address::default()).expect("Could not initialize MPU6050!");
+    // digital motion processor
     mpu6050.initialize_dmp(delay).unwrap();
     mpu6050.enable_fifo().unwrap();
     mpu6050
@@ -380,13 +334,10 @@ async fn flight_loop(
                 throttle: thr,
             },
         };
-        if !log_ch_s.is_full() {
-            if let Err(_e) = log_ch_s.send(log_data).await {
-                debug!("Error sending log data: No reciever.");
-            }
-        } else {
-            debug!("Log channel full.");
-        }
+        log_ch_s
+            .send(log_data)
+            .await
+            .expect("Error sending log data");
 
         let duty = scale_servo(ele, cx.local.elevator_channel.get_max_duty());
         cx.local.elevator_channel.set_duty(duty);
@@ -396,11 +347,11 @@ async fn flight_loop(
 }
 
 async fn log_write(
-    mut _cx: app::log_write_task::Context<'_>,
+    mut cx: app::log_write_task::Context<'_>,
     mut log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
 ) {
     loop {
-        let _data = match log_ch_r.recv().await {
+        let data = match log_ch_r.recv().await {
             Ok(data) => data,
             Err(e) => match e {
                 rtic_sync::channel::ReceiveError::NoSender => {
@@ -413,7 +364,8 @@ async fn log_write(
                 }
             },
         };
-        debug!("TODO: Write to flash");
+        let now = Systick::now().duration_since_epoch();
+        info!("received {:?}", now.to_millis());
     }
 }
 
