@@ -10,6 +10,7 @@ rustflags = [
 
 [build]
 target = "thumbv7em-none-eabihf"
+target-dir = "embedded-target" 
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 runner = "probe-run --chip STM32F411RETx"

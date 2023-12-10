@@ -1,6 +1,9 @@
 .vscode
 debug/
-target/
+
+ollyfc/embedded-target/
+ollyfc_host/target/
+
 Cargo.lock
 **/*.rs.bk
 *.pdb
