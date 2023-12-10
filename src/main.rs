@@ -1,14 +1,23 @@
-#![deny(unsafe_code)]
 #![no_main]
 #![no_std]
 #![feature(type_alias_impl_trait)]
 #![feature(generic_arg_infer)]
 
+/// Hardware
+///
+/// TIM4 - task dispatcher
+/// TIM5 - task dispatcher
+/// TIM1 - timer for flash memory access
+/// TIM2 - timer for mpu6050
+/// TIM3 - PWM timer
+/// TIM10 - 1kHz Misc. Utility timer
+///
+///
+///
+use defmt::{debug, info};
 use defmt_rtt as _;
 use ollyfc::w25q::W25Q;
 use panic_probe as _;
-
-use defmt::{debug, info};
 
 // Crate
 use ollyfc::flight_control::ControlPolicy;
@@ -37,8 +46,9 @@ use mpu6050_dmp::{
 use stm32f4xx_hal::{
     dma::{StreamsTuple, Transfer},
     gpio::{Output, Pin},
-    pac::TIM3,
+    otg_fs::{UsbBus, UsbBusType, USB},
     pac::{DMA2, I2C1, USART1},
+    pac::{TIM10, TIM3},
     prelude::*,
     serial::{Config, Rx},
     spi::{Mode, Phase, Polarity, Spi},
@@ -46,6 +56,12 @@ use stm32f4xx_hal::{
     timer::{Channel3, PwmChannel},
     {dma, serial},
 };
+
+// USB
+use usb_device::{class_prelude::UsbBusAllocator, prelude::*};
+use usbd_serial::SerialPort;
+
+/******************************************************************************/
 
 // Constants
 const LOGDATA_CHAN_SIZE: usize = 128;
@@ -60,6 +76,22 @@ type SbusInTransfer = Transfer<
     &'static mut [u8; SBUS_BUF_SZ],
 >;
 
+/// The program can have 2 modes. Flight mode is the default, and is used when
+/// we want the device to act as a flight controller.
+///
+/// Data mode is used when we want to connect the device to be connected to the
+/// PC via USB. In this mode, the device will not run any of the flight
+/// controller tasks.
+#[derive(Debug, Clone, Copy, PartialEq, defmt::Format)]
+enum ProgramMode {
+    // Flight computer running, USB not connected
+    FlightMode,
+    // Flight computer not running, USB connected
+    DataMode,
+}
+
+/******************************************************************************/
+
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5])]
 mod app {
 
@@ -71,6 +103,9 @@ mod app {
         // Serial
         sbus_rx_transfer: SbusInTransfer,
         flight_controls: sbus::FlightControls,
+        // USB
+        usb_dev: UsbDevice<'static, UsbBus<USB>>,
+        usb_ser: SerialPort<'static, UsbBus<USB>>,
     }
 
     #[local]
@@ -87,15 +122,30 @@ mod app {
 
     #[init]
     fn init(mut cx: init::Context) -> (Shared, Local) {
-        // Setup clocks
-        let rcc = cx.device.RCC.constrain();
-        let mut syscfg = cx.device.SYSCFG.constrain();
+        // Device Peripherals
+        let mut dp = cx.device;
+
+        // Clock Setup
+        let rcc = dp.RCC.constrain();
+        let hse = 25.MHz();
+        let sysclk = 64.MHz();
+        let clocks = rcc
+            .cfgr
+            .use_hse(hse)
+            .sysclk(sysclk)
+            .require_pll48clk()
+            .freeze();
+
+        let mut syscfg = dp.SYSCFG.constrain();
         let systick_mono_token = rtic_monotonics::create_systick_token!();
         Systick::start(cx.core.SYST, 64_000_000, systick_mono_token);
-        let clocks = rcc.cfgr.sysclk(64.MHz()).freeze();
 
-        let gpiob = cx.device.GPIOB.split();
-        let gpioa = cx.device.GPIOA.split();
+        // Utility timer
+        let mut util_timer: Delay<TIM10, 1000> = dp.TIM10.delay_ms(&clocks);
+
+        // GPIO
+        let gpiob = dp.GPIOB.split();
+        let gpioa = dp.GPIOA.split();
 
         // Flash memory
         let mem = mem_init(
@@ -103,8 +153,8 @@ mod app {
             gpioa.pa5.into_alternate(),
             gpioa.pa6.into_alternate(),
             gpioa.pa7.into_alternate(),
-            cx.device.SPI1,
-            cx.device.TIM1,
+            dp.SPI1,
+            dp.TIM1,
             &clocks,
         );
 
@@ -122,11 +172,11 @@ mod app {
                 .into_alternate()
                 .internal_pull_up(true)
                 .set_open_drain(),
-            cx.device.I2C1,
-            &mut cx.device.EXTI,
+            dp.I2C1,
+            &mut dp.EXTI,
             &mut syscfg,
             &clocks,
-            &mut cx.device.TIM2.delay_us(&clocks),
+            &mut dp.TIM2.delay_us(&clocks),
         );
 
         // Channel for log data
@@ -134,8 +184,7 @@ mod app {
 
         // Sbus In: receiving flight commands
         debug!("sbus in: serial...");
-        let mut sbus_in: Rx<USART1, u8> = cx
-            .device
+        let mut sbus_in: Rx<USART1, u8> = dp
             .USART1
             .rx(
                 gpioa.pa10.into_alternate(),
@@ -149,7 +198,7 @@ mod app {
 
         // Sbus In:  DMA stream
         info!("sbus in: dma...");
-        let dma2 = StreamsTuple::new(cx.device.DMA2);
+        let dma2 = StreamsTuple::new(dp.DMA2);
 
         let sbus_in_buffer_A =
             cortex_m::singleton!(: [u8; SBUS_BUF_SZ] = [0; SBUS_BUF_SZ]).unwrap();
@@ -171,23 +220,81 @@ mod app {
 
         // Set up PWM
         info!("PWM...");
-        let pwm = cx
-            .device
-            .TIM3
-            .pwm_hz(Channel3::new(gpiob.pb0), 52.Hz(), &clocks);
+        let pwm = dp.TIM3.pwm_hz(Channel3::new(gpiob.pb0), 52.Hz(), &clocks);
         let mut elevator_channel = pwm.split();
         elevator_channel.enable();
 
-        info!("Starting tasks...");
+        // USB -
+        info!("USB Button Setup...");
+        let usb_btn = gpioa.pa0.into_pull_up_input();
+        // Wait for gpio setup
+        util_timer.delay_ms(5u32);
 
-        primary_flight_loop_task::spawn(log_ch_s).unwrap();
-        log_write_task::spawn(log_ch_r).unwrap();
+        // Check if blue button is pressed and set flight mode
+        let mode: ProgramMode;
+        if usb_btn.is_high() {
+            mode = ProgramMode::FlightMode;
+        } else {
+            mode = ProgramMode::DataMode;
+        }
+        info!("Program mode is set: {:?}", mode);
+
+        // USB - Device setup
+        info!("USB Device Setup...");
+        static mut EP_MEMORY: [u32; 1024] = [0; 1024];
+        static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>> = None;
+        let usb = USB {
+            usb_global: dp.OTG_FS_GLOBAL,
+            usb_device: dp.OTG_FS_DEVICE,
+            usb_pwrclk: dp.OTG_FS_PWRCLK,
+            pin_dm: gpioa.pa11.into(),
+            pin_dp: gpioa.pa12.into(),
+            hclk: clocks.hclk(),
+        };
+        unsafe {
+            USB_BUS.replace(UsbBus::new(usb, &mut EP_MEMORY));
+        }
+        let mut usb_ser = usbd_serial::SerialPort::new(unsafe { &USB_BUS.as_ref().unwrap() });
+        let mut usb_dev = UsbDeviceBuilder::new(
+            unsafe { &USB_BUS.as_ref().unwrap() },
+            UsbVidPid(0x16c0, 0x27dd),
+        )
+        .device_class(usbd_serial::USB_CLASS_CDC)
+        .strings(&[StringDescriptors::default()
+            .manufacturer("OllyFC")
+            .product("OllyFC Flight Computer")
+            .serial_number("0001")])
+        .unwrap()
+        .build();
+
+        // USB Mode only! Enter polling loop until host device is connected.
+        if mode == ProgramMode::DataMode {
+            info!("Data mode initiated. Waiting for USB connection...");
+            loop {
+                usb_dev.poll(&mut [&mut usb_ser]);
+                match usb_dev.state() {
+                    UsbDeviceState::Configured => {
+                        break;
+                    }
+                    _ => {
+                        continue;
+                    }
+                }
+            }
+            info!("USB connection established.");
+        } else {
+            info!("Flight mode initiated. Ignoring USB connection.");
+            primary_flight_loop_task::spawn(log_ch_s).unwrap();
+            log_write_task::spawn(log_ch_r).unwrap();
+        }
 
         (
             Shared {
                 gyro: SensorInput::default(),
                 sbus_rx_transfer: sbus_in_transfer,
                 flight_controls: sbus::FlightControls::default(),
+                usb_dev: usb_dev,
+                usb_ser: usb_ser,
             },
             Local {
                 elevator_channel: elevator_channel,
@@ -237,6 +344,8 @@ mod app {
         read_sbus_stream(&mut cx);
     }
 }
+
+/******************************************************************************/
 
 fn mpu_6050_init(
     interrupt: &mut Pin<'B', 8, Input>,
@@ -365,7 +474,6 @@ async fn log_write(
             },
         };
         let now = Systick::now().duration_since_epoch();
-        info!("received {:?}", now.to_millis());
     }
 }
 

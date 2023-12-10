@@ -73,6 +73,13 @@ mod app {
         .unwrap()
         .build();
 
+        match usb_dev.state() {
+            UsbDeviceState::Default => info!("USB: Default"),
+            UsbDeviceState::Addressed => info!("USB: Addressed"),
+            UsbDeviceState::Configured => info!("USB: Configured"),
+            UsbDeviceState::Suspend => info!("USB: Suspended"),
+        }
+
         (Shared { usb_dev, usb_ser }, Local {})
     }
 
