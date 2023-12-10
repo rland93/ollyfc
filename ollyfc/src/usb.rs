@@ -1,3 +1,5 @@
+use defmt::info;
+use rtic::{mutex_prelude::TupleExt02, Mutex};
 use stm32f4xx_hal::otg_fs::{UsbBus, UsbBusType, USB};
 use usb_device::{
     class_prelude::UsbBusAllocator,
@@ -27,4 +29,34 @@ pub fn usb_setup(
     (usb_dev, usb_ser)
 }
 
-pub async fn usb_task_fn(_cx: crate::app::usb_task::Context<'_>) {}
+pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
+    loop {
+        let usb_dev = &mut cx.shared.usb_dev;
+        let usb_ser = &mut cx.shared.usb_ser;
+        (usb_dev, usb_ser).lock(usb_listener);
+    }
+}
+
+fn usb_listener(
+    usb_dev: &mut UsbDevice<'static, UsbBusType>,
+    usb_serial: &mut usbd_serial::SerialPort<'static, UsbBusType>,
+) {
+    if (*usb_dev).poll(&mut [usb_serial]) {
+        // events
+        let mut buf: [u8; 256] = [0u8; 256];
+        match usb_serial.read(&mut buf) {
+            // data
+            Ok(count) if count > 0 => {
+                info!("{}", buf);
+            }
+            // no data
+            Ok(_) => {}
+            // usb error
+            Err(e) => {}
+        }
+    }
+    // Poll USB and check for commands
+    // If 'Start Dump' command is received, start sending data
+    // Read data from flash and write to USB OUT endpoint
+    // Handle 'End Dump' command or other control messages
+}
