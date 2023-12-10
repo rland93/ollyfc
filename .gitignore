@@ -1,6 +1,9 @@
 .vscode
 debug/
 
+# rust analyzer
+target/
+# target dirs
 ollyfc/embedded-target/
 ollyfc_host/target/
 
