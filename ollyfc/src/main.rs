@@ -257,7 +257,7 @@ mod app {
         let mut usb_ser = usbd_serial::SerialPort::new(unsafe { &USB_BUS.as_ref().unwrap() });
         let mut usb_dev = UsbDeviceBuilder::new(
             unsafe { &USB_BUS.as_ref().unwrap() },
-            UsbVidPid(0x16c0, 0x27dd),
+            UsbVidPid(0x1209, 0x6EF1),
         )
         .device_class(usbd_serial::USB_CLASS_CDC)
         .strings(&[StringDescriptors::default()
