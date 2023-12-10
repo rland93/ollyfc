@@ -76,6 +76,12 @@ type SbusInTransfer = Transfer<
     &'static mut [u8; SBUS_BUF_SZ],
 >;
 
+/// The program can have 2 modes. Flight mode is the default, and is used when
+/// we want the device to act as a flight controller.
+///
+/// Data mode is used when we want to connect the device to be connected to the
+/// PC via USB. In this mode, the device will not run any of the flight
+/// controller tasks.
 #[derive(Debug, Clone, Copy, PartialEq, defmt::Format)]
 enum ProgramMode {
     // Flight computer running, USB not connected
@@ -261,30 +267,26 @@ mod app {
         .unwrap()
         .build();
 
-        // Enter polling loop to determine if we are connected
-        loop {
-            usb_dev.poll(&mut [&mut usb_ser]);
-            match usb_dev.state() {
-                UsbDeviceState::Default => {
-                    continue;
-                }
-                UsbDeviceState::Addressed => {
-                    continue;
-                }
-                UsbDeviceState::Configured => {
-                    info!("USB: Configured");
-                    break;
-                }
-                UsbDeviceState::Suspend => {
-                    continue;
+        // USB Mode only! Enter polling loop until host device is connected.
+        if mode == ProgramMode::DataMode {
+            info!("Data mode initiated. Waiting for USB connection...");
+            loop {
+                usb_dev.poll(&mut [&mut usb_ser]);
+                match usb_dev.state() {
+                    UsbDeviceState::Configured => {
+                        break;
+                    }
+                    _ => {
+                        continue;
+                    }
                 }
             }
+            info!("USB connection established.");
+        } else {
+            info!("Flight mode initiated. Ignoring USB connection.");
+            primary_flight_loop_task::spawn(log_ch_s).unwrap();
+            log_write_task::spawn(log_ch_r).unwrap();
         }
-
-        info!("Starting tasks...");
-
-        primary_flight_loop_task::spawn(log_ch_s).unwrap();
-        log_write_task::spawn(log_ch_r).unwrap();
 
         (
             Shared {
