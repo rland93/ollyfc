@@ -6,38 +6,43 @@ use crossterm::{
 use std::io;
 use tui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Span, Spans},
     widgets::{Block, Borders, List, ListItem, Paragraph},
-    Terminal,
+    Frame, Terminal,
 };
+use usb::FcUsbDevice;
 
 mod usb;
 
 enum AppState {
     Searching,
-    Interacting(usb::FcUsbDevice), // Assuming FcUsbDevice is your device type
+    Interacting(usb::FcUsbDevice),
 }
 
 fn main() -> Result<(), io::Error> {
-    // Initialize terminal and state
+    // initialize
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut app_state = AppState::Searching;
 
+    execute!(std::io::stdout(), terminal::Clear(terminal::ClearType::All))?;
+    execute!(std::io::stdout(), EnterAlternateScreen)?;
+
+    // primary loop
     loop {
         terminal
-            .draw(|f| {
+            .draw(|f: &mut Frame<'_, CrosstermBackend<io::Stdout>>| {
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Percentage(90), // Main area
-                            Constraint::Percentage(10), // Control bar
+                            Constraint::Min(3),    // Main area
+                            Constraint::Length(3), // Control bar
                         ]
                         .as_ref(),
                     )
@@ -57,6 +62,8 @@ fn main() -> Result<(), io::Error> {
                     }
                     AppState::Interacting(device) => {
                         // TODO: usb communications
+                        let block = Block::default().borders(Borders::ALL).title("Status");
+                        f.render_widget(block, chunks[0]);
                     }
                 }
                 let exit_text = Span::styled("Exit (CTRL+C)", Style::default().fg(Color::Red));
@@ -66,7 +73,7 @@ fn main() -> Result<(), io::Error> {
             })
             .unwrap();
 
-        // Handle inputs
+        // keyboard inputs
         if event::poll(std::time::Duration::from_millis(100))? {
             if let event::Event::Key(KeyEvent {
                 code, modifiers, ..
@@ -83,11 +90,11 @@ fn main() -> Result<(), io::Error> {
             }
         }
 
-        // Include a small sleep to reduce CPU usage
+        // sleep a bit
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // Restore terminal
+    // restore terminal after closed
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
     Ok(())
