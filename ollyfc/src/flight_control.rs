@@ -2,26 +2,7 @@ use defmt::Format;
 use rtic::Mutex;
 use rtic_monotonics::{systick::ExtU32, Monotonic};
 
-use crate::flight_logger::{FlightLogData, SBusInput, SensorInput};
-
-#[derive(Debug, Clone, Copy, Format)]
-pub struct ControlPolicy {
-    pub elevator: u16,
-    pub aileron: u16,
-    pub rudder: u16,
-    pub throttle: u16,
-}
-
-impl ControlPolicy {
-    pub fn default() -> Self {
-        Self {
-            elevator: 0,
-            aileron: 0,
-            rudder: 0,
-            throttle: 0,
-        }
-    }
-}
+use ollyfc_common::{ControlPolicy, FlightLogData, SBusInput, SensorInput};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SwitchMode {
@@ -72,11 +53,7 @@ fn scale_servo(elevator: u16, duty_max: u16) -> u16 {
 
 pub async fn flight_loop(
     mut cx: crate::app::primary_flight_loop_task::Context<'_>,
-    mut log_ch_s: rtic_sync::channel::Sender<
-        'static,
-        crate::flight_logger::FlightLogData,
-        { crate::LOGDATA_CHAN_SIZE },
-    >,
+    mut log_ch_s: rtic_sync::channel::Sender<'static, FlightLogData, { crate::LOGDATA_CHAN_SIZE }>,
 ) {
     loop {
         let now = rtic_monotonics::systick::Systick::now();

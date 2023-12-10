@@ -50,6 +50,8 @@ use stm32f4xx_hal::{
 use usb_device::{class_prelude::UsbBusAllocator, prelude::*};
 use usbd_serial::SerialPort;
 
+use ollyfc_common::{FlightLogData, SensorInput};
+
 /******************************************************************************/
 
 // Constants
@@ -87,7 +89,6 @@ mod usb;
 mod w25q;
 
 // Crate
-use flight_logger::{FlightLogData, SensorInput};
 use w25q::W25Q;
 
 /******************************************************************************/
@@ -310,8 +311,8 @@ mod app {
     }
 
     #[task(priority = 1, shared=[usb_dev, usb_ser, mem])]
-    async fn usb_task(cx: usb_task::Context) {
-        usb::usb_task_fn(cx).await;
+    async fn usb_task(mut cx: usb_task::Context) {
+        usb::usb_task_fn(&mut cx).await;
     }
 
     #[task(priority = 3, shared=[flight_controls, gyro], local=[elevator_channel])]

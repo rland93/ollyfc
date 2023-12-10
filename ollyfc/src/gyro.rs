@@ -1,8 +1,9 @@
-use crate::{app::sensor_task, flight_logger::SensorInput};
+use crate::app::sensor_task;
 use mpu6050_dmp::{
     accel::Accel, address::Address, config::DigitalLowPassFilter, quaternion::Quaternion,
     sensor::Mpu6050, yaw_pitch_roll::YawPitchRoll,
 };
+use ollyfc_common::SensorInput;
 use rtic::Mutex;
 use stm32f4xx_hal::{
     gpio::{Alternate, Edge, Input, OpenDrain, Pin},
