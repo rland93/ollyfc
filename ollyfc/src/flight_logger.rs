@@ -1,4 +1,5 @@
 use defmt::{debug, error, Format};
+use rtic_monotonics::Monotonic;
 
 use crate::flight_control::ControlPolicy;
 use crate::sbus::FlightControls;
@@ -155,5 +156,31 @@ impl FlightLogData {
             sensor_input: SensorInput::default(),
             control_policy: ControlPolicy::default(),
         }
+    }
+}
+
+pub async fn log_write(
+    mut cx: crate::app::log_write_task::Context<'_>,
+    mut log_ch_r: rtic_sync::channel::Receiver<
+        'static,
+        FlightLogData,
+        { crate::LOGDATA_CHAN_SIZE },
+    >,
+) {
+    loop {
+        let data = match log_ch_r.recv().await {
+            Ok(data) => data,
+            Err(e) => match e {
+                rtic_sync::channel::ReceiveError::NoSender => {
+                    debug!("No sender.");
+                    continue;
+                }
+                rtic_sync::channel::ReceiveError::Empty => {
+                    debug!("Empty queue.");
+                    continue;
+                }
+            },
+        };
+        let now = rtic_monotonics::systick::Systick::now().duration_since_epoch();
     }
 }

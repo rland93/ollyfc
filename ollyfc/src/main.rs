@@ -16,31 +16,20 @@
 ///
 use defmt::{debug, info};
 use defmt_rtt as _;
-use ollyfc::w25q::W25Q;
 use panic_probe as _;
 
-// Crate
-use ollyfc::flight_control::ControlPolicy;
-use ollyfc::flight_logger::{FlightLogData, SBusInput, SensorInput};
-use ollyfc::{sbus, w25q};
-
 // RTIC
-use rtic::Mutex;
 use rtic_monotonics::systick::Systick;
-use rtic_monotonics::Monotonic;
 use rtic_sync::{
     channel::{Receiver, Sender},
     make_channel,
 };
 
-use stm32f4xx_hal::gpio::{Alternate, Edge, Input, OpenDrain};
-use stm32f4xx_hal::{i2c, pac, rcc, syscfg};
+use stm32f4xx_hal::gpio::Alternate;
+use stm32f4xx_hal::{i2c, pac, rcc};
 
 // Sensor
-use mpu6050_dmp::{
-    accel::Accel, address::Address, config, quaternion::Quaternion, sensor::Mpu6050,
-    yaw_pitch_roll::YawPitchRoll,
-};
+use mpu6050_dmp::sensor::Mpu6050;
 
 // HAL
 use stm32f4xx_hal::{
@@ -90,6 +79,17 @@ enum ProgramMode {
     DataMode,
 }
 
+mod flight_control;
+mod flight_logger;
+mod gyro;
+mod sbus;
+mod usb;
+mod w25q;
+
+// Crate
+use flight_logger::{FlightLogData, SensorInput};
+use w25q::W25Q;
+
 /******************************************************************************/
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5])]
@@ -106,6 +106,8 @@ mod app {
         // USB
         usb_dev: UsbDevice<'static, UsbBus<USB>>,
         usb_ser: SerialPort<'static, UsbBus<USB>>,
+        // Memory
+        mem: W25Q,
     }
 
     #[local]
@@ -121,7 +123,7 @@ mod app {
     }
 
     #[init]
-    fn init(mut cx: init::Context) -> (Shared, Local) {
+    fn init(cx: init::Context) -> (Shared, Local) {
         // Device Peripherals
         let mut dp = cx.device;
 
@@ -160,7 +162,7 @@ mod app {
 
         // Gyroscope
         let mut mpu_int = gpiob.pb8.into_pull_down_input();
-        let mpu = mpu_6050_init(
+        let mpu = gyro::mpu_6050_init(
             &mut mpu_int,
             gpiob
                 .pb6
@@ -243,6 +245,7 @@ mod app {
         info!("USB Device Setup...");
         static mut EP_MEMORY: [u32; 1024] = [0; 1024];
         static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>> = None;
+
         let usb = USB {
             usb_global: dp.OTG_FS_GLOBAL,
             usb_device: dp.OTG_FS_DEVICE,
@@ -251,21 +254,8 @@ mod app {
             pin_dp: gpioa.pa12.into(),
             hclk: clocks.hclk(),
         };
-        unsafe {
-            USB_BUS.replace(UsbBus::new(usb, &mut EP_MEMORY));
-        }
-        let mut usb_ser = usbd_serial::SerialPort::new(unsafe { &USB_BUS.as_ref().unwrap() });
-        let mut usb_dev = UsbDeviceBuilder::new(
-            unsafe { &USB_BUS.as_ref().unwrap() },
-            UsbVidPid(0x1209, 0x6EF1),
-        )
-        .device_class(usbd_serial::USB_CLASS_CDC)
-        .strings(&[StringDescriptors::default()
-            .manufacturer("OllyFC")
-            .product("OllyFC Flight Computer")
-            .serial_number("0001")])
-        .unwrap()
-        .build();
+        let (mut usb_dev, mut usb_ser) =
+            crate::usb::usb_setup(usb, unsafe { &mut USB_BUS }, unsafe { &mut EP_MEMORY });
 
         // USB Mode only! Enter polling loop until host device is connected.
         if mode == ProgramMode::DataMode {
@@ -295,6 +285,7 @@ mod app {
                 flight_controls: sbus::FlightControls::default(),
                 usb_dev: usb_dev,
                 usb_ser: usb_ser,
+                mem: mem,
             },
             Local {
                 elevator_channel: elevator_channel,
@@ -318,12 +309,17 @@ mod app {
         }
     }
 
+    #[task(priority = 1, shared=[usb_dev, usb_ser, mem])]
+    async fn usb_task(cx: usb_task::Context) {
+        usb::usb_task_fn(cx).await;
+    }
+
     #[task(priority = 3, shared=[flight_controls, gyro], local=[elevator_channel])]
     async fn primary_flight_loop_task(
         cx: primary_flight_loop_task::Context,
         log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
-        flight_loop(cx, log_ch_s).await;
+        crate::flight_control::flight_loop(cx, log_ch_s).await;
     }
 
     #[task(local=[log_grp_idx, log_buffer], priority=1)]
@@ -331,49 +327,21 @@ mod app {
         cx: log_write_task::Context,
         log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
-        log_write(cx, log_ch_r).await;
+        crate::flight_logger::log_write(cx, log_ch_r).await;
     }
 
     #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]
     fn sensor_task(mut cx: sensor_task::Context) {
-        read_sensor_i2c(&mut cx);
+        crate::gyro::read_sensor_i2c(&mut cx);
     }
 
     #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer, flight_controls], local = [sbus_rx_buffer])]
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
-        read_sbus_stream(&mut cx);
+        crate::sbus::read_sbus_stream(&mut cx);
     }
 }
 
 /******************************************************************************/
-
-fn mpu_6050_init(
-    interrupt: &mut Pin<'B', 8, Input>,
-    scl: Pin<'B', 6, Alternate<4, OpenDrain>>,
-    sda: Pin<'B', 7, Alternate<4, OpenDrain>>,
-    i2c1: pac::I2C1,
-    exti: &mut pac::EXTI,
-    syscfg: &mut syscfg::SysCfg,
-    clocks: &rcc::Clocks,
-    delay: &mut Delay<pac::TIM2, 1000000>,
-) -> Mpu6050<i2c::I2c<pac::I2C1>> {
-    // Configure pin for interrupt on data ready
-    interrupt.make_interrupt_source(syscfg);
-    interrupt.trigger_on_edge(exti, Edge::Falling);
-    interrupt.enable_interrupt(exti);
-    let i2c_dev = i2c1.i2c((scl, sda), 400.kHz(), &clocks);
-    let mut mpu6050: Mpu6050<i2c::I2c<pac::I2C1>> =
-        Mpu6050::new(i2c_dev, Address::default()).expect("Could not initialize MPU6050!");
-    // digital motion processor
-    mpu6050.initialize_dmp(delay).unwrap();
-    mpu6050.enable_fifo().unwrap();
-    mpu6050
-        .set_digital_lowpass_filter(config::DigitalLowPassFilter::Filter2)
-        .unwrap();
-    mpu6050.disable_interrupts().unwrap();
-    mpu6050.interrupt_fifo_oflow_en().unwrap();
-    mpu6050
-}
 
 fn mem_init(
     cs: Pin<'A', 4, Output>,
@@ -390,186 +358,4 @@ fn mem_init(
     };
     let spi = Spi::new(spi, (sck, miso, mosi), mode, 100.kHz(), clocks);
     w25q::W25Q::new(spi, cs, tim.delay_us(&clocks))
-}
-
-async fn flight_loop(
-    mut cx: app::primary_flight_loop_task::Context<'_>,
-    mut log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
-) {
-    loop {
-        let now = Systick::now();
-        // Flight Controls
-        let controls = cx
-            .shared
-            .flight_controls
-            .lock(|fc: &mut sbus::FlightControls| fc.clone());
-        let arm_mode = switch_mode(controls.arm);
-        let enable_mode = switch_mode(controls.enable);
-        let record_mode = switch_mode(controls.record);
-
-        // Sensor
-        let gyro = cx.shared.gyro.lock(|g: &mut SensorInput| g.clone());
-
-        // control policies
-        let ele = elevator_ctl(controls.elevator, arm_mode);
-        let ail = aileron_ctl(controls.aileron);
-        let rud = rudder_ctl(controls.rudder);
-        let thr = throttle_ctl(controls.throttle);
-
-        // Send data to logger
-        let log_data = FlightLogData {
-            timestamp: 0,
-            sbus_input: SBusInput {
-                throttle: controls.throttle,
-                aileron: controls.aileron,
-                elevator: controls.elevator,
-                rudder: controls.rudder,
-                arm: arm_mode as u16,
-                enable: enable_mode as u16,
-                record: record_mode as u16,
-            },
-            sensor_input: SensorInput {
-                pitch: gyro.pitch,
-                yaw: gyro.yaw,
-                roll: gyro.roll,
-                accel_x: gyro.accel_x,
-                accel_y: gyro.accel_y,
-                accel_z: gyro.accel_z,
-            },
-            control_policy: ControlPolicy {
-                elevator: ele,
-                aileron: ail,
-                rudder: rud,
-                throttle: thr,
-            },
-        };
-        log_ch_s
-            .send(log_data)
-            .await
-            .expect("Error sending log data");
-
-        let duty = scale_servo(ele, cx.local.elevator_channel.get_max_duty());
-        cx.local.elevator_channel.set_duty(duty);
-
-        Systick::delay_until(now + 20.millis()).await;
-    }
-}
-
-async fn log_write(
-    mut cx: app::log_write_task::Context<'_>,
-    mut log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
-) {
-    loop {
-        let data = match log_ch_r.recv().await {
-            Ok(data) => data,
-            Err(e) => match e {
-                rtic_sync::channel::ReceiveError::NoSender => {
-                    debug!("No sender.");
-                    continue;
-                }
-                rtic_sync::channel::ReceiveError::Empty => {
-                    debug!("Empty queue.");
-                    continue;
-                }
-            },
-        };
-        let now = Systick::now().duration_since_epoch();
-    }
-}
-
-fn read_sensor_i2c(cx: &mut app::sensor_task::Context) {
-    // Grab newest from buffer
-    let mut buf = [0; 28];
-    let buf = cx.local.mpu6050.read_fifo(&mut buf).unwrap();
-    // Gyro
-    let quat = Quaternion::from_bytes(&buf[..16]).unwrap();
-    let ypr = YawPitchRoll::from(quat);
-    // Acceleration
-    let mut accelbytes: [u8; 6] = [0; 6];
-    accelbytes.copy_from_slice(&buf[16..22]);
-
-    let accel = Accel::from_bytes(accelbytes);
-    let accel_scaled = accel.scaled(mpu6050_dmp::accel::AccelFullScale::G4);
-    // store sensor input
-    cx.shared.gyro.lock(|s| {
-        *s = SensorInput {
-            pitch: ypr.pitch,
-            yaw: ypr.yaw,
-            roll: ypr.roll,
-            accel_x: accel_scaled.x(),
-            accel_y: accel_scaled.y(),
-            accel_z: accel_scaled.z(),
-        };
-    });
-    cx.local.mpu6050_int.clear_interrupt_pending_bit();
-}
-
-fn read_sbus_stream(cx: &mut app::sbus_dma_stream::Context) {
-    cx.shared
-        .sbus_rx_transfer
-        .lock(|transfer: &mut SbusInTransfer| {
-            if transfer.is_idle() {
-                // Allocate a new buffer
-                let new_buf = cx.local.sbus_rx_buffer.take().unwrap();
-                // Replace the new buffer with contents from the stream
-                let (buffer, _current) = transfer.next_transfer(new_buf).unwrap();
-
-                let control: sbus::SbusChannels = sbus::SbusData::new(*buffer).parse();
-                let control: sbus::FlightControls = control.get_input();
-                // TODO: send FlightControls to shared object...
-                cx.shared.flight_controls.lock(|fc| {
-                    *fc = control;
-                });
-
-                // Free buffer
-                *cx.local.sbus_rx_buffer = Some(buffer);
-            }
-        });
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SwitchMode {
-    Low,
-    Neutral,
-    High,
-}
-
-fn switch_mode(switch_input: u16) -> SwitchMode {
-    if switch_input < 500 {
-        SwitchMode::Low
-    } else if switch_input > 1500 {
-        SwitchMode::High
-    } else {
-        SwitchMode::Neutral
-    }
-}
-
-fn elevator_ctl(ele: u16, en: SwitchMode) -> u16 {
-    if en == SwitchMode::High {
-        ele + 200
-    } else {
-        ele
-    }
-}
-
-fn aileron_ctl(ail: u16) -> u16 {
-    ail
-}
-
-fn rudder_ctl(rud: u16) -> u16 {
-    rud
-}
-
-fn throttle_ctl(thr: u16) -> u16 {
-    thr
-}
-
-fn scale_servo(elevator: u16, duty_max: u16) -> u16 {
-    let min_pulse_width = 900; // 900 μs
-    let max_pulse_width = 2100; // 2100 μs
-    let pulse_width_range = max_pulse_width - min_pulse_width;
-    let servo_pulse_width =
-        min_pulse_width + (elevator as f32 / 2048.0 * pulse_width_range as f32) as u16;
-    let pwm_duty = (servo_pulse_width as f32 / 20000.0 * duty_max as f32) as u16;
-    return pwm_duty;
 }

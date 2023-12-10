@@ -57,7 +57,7 @@ mod app {
             100.kHz(),
             &clocks,
         );
-        let timer = cx.device.TIM3.delay_us(&clocks);
+        let timer = cx.device.TIM1.delay_us(&clocks);
         let mem = w25q::W25Q::new(spi1, spi1_cs, timer);
         info!("Initialized peripherals");
         info!("Spawning test task...");
