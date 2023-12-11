@@ -273,6 +273,7 @@ mod app {
                 }
             }
             info!("USB connection established.");
+            usb_task::spawn().unwrap();
         } else {
             info!("Flight mode initiated. Ignoring USB connection.");
             primary_flight_loop_task::spawn(log_ch_s).unwrap();
@@ -310,9 +311,16 @@ mod app {
         }
     }
 
+    /// Primary task for managing USB reading and writing
     #[task(priority = 1, shared=[usb_dev, usb_ser, mem])]
     async fn usb_task(mut cx: usb_task::Context) {
         usb::usb_task_fn(&mut cx).await;
+    }
+
+    /// Task for sending data to host over USB
+    #[task(priority = 1, shared=[usb_dev, usb_ser, mem])]
+    async fn usb_send_task(mut cx: usb_send_task::Context) {
+        usb::usb_send_task_fn(&mut cx).await;
     }
 
     #[task(priority = 3, shared=[flight_controls, gyro], local=[elevator_channel])]

@@ -1,5 +1,7 @@
 #![cfg_attr(feature = "defmt", no_std)]
 
+pub mod cmd;
+
 use core::convert::TryInto;
 
 pub const LOG_SIZE: usize = 64;

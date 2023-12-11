@@ -1,5 +1,6 @@
 use defmt::info;
-use rtic::{mutex_prelude::TupleExt02, Mutex};
+use ollyfc_common::cmd::Command;
+use rtic::mutex_prelude::TupleExt02;
 use stm32f4xx_hal::otg_fs::{UsbBus, UsbBusType, USB};
 use usb_device::{
     class_prelude::UsbBusAllocator,
@@ -37,26 +38,50 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
     }
 }
 
+pub async fn usb_send_task_fn(cx: &mut crate::app::usb_send_task::Context<'_>) {
+    let usb_dev = &mut cx.shared.usb_dev;
+    let usb_ser = &mut cx.shared.usb_ser;
+    (usb_dev, usb_ser).lock(usb_send);
+}
+
+fn usb_send(
+    usb_dev: &mut UsbDevice<'static, UsbBusType>,
+    usb_serial: &mut usbd_serial::SerialPort<'static, UsbBusType>,
+) {
+    // TODO
+    // - implement channel to receive data
+}
+
 fn usb_listener(
     usb_dev: &mut UsbDevice<'static, UsbBusType>,
     usb_serial: &mut usbd_serial::SerialPort<'static, UsbBusType>,
 ) {
     if (*usb_dev).poll(&mut [usb_serial]) {
         // events
-        let mut buf: [u8; 256] = [0u8; 256];
-        match usb_serial.read(&mut buf) {
-            // data
-            Ok(count) if count > 0 => {
-                info!("{}", buf);
+        let mut buf: [u8; 128] = [0u8; 128];
+
+        if let Ok(count) = usb_serial.read(&mut buf) {
+            if count > 0 {
+                cmd_handler(&buf, count);
             }
-            // no data
-            Ok(_) => {}
-            // usb error
-            Err(e) => {}
         }
     }
-    // Poll USB and check for commands
-    // If 'Start Dump' command is received, start sending data
-    // Read data from flash and write to USB OUT endpoint
-    // Handle 'End Dump' command or other control messages
+    // TODO
+    // - read flash data command handler
+    // - erase flash data command handler
+    // - acknowledge handler
+}
+
+fn cmd_handler(buf: &[u8; 128], count: usize) {
+    match Command::from_byte(buf[0]) {
+        Some(Command::Acknowledge) => {
+            acknowledge_handler(buf);
+        }
+        None => {}
+        _ => {}
+    }
+}
+
+fn acknowledge_handler(buf: &[u8]) {
+    info!("acknowledge!");
 }
