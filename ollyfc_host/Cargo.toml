@@ -1,9 +1,0 @@
-[package]
-name = "ollyfc_host"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-tui = "0.19"
-crossterm = {version = "0.27", features = ["event-stream"]}
-rusb = "0.9"

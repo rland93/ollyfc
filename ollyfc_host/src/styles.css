@@ -1,0 +1,43 @@
+:root {
+  --dark1: #1c222c;
+  --dark2: #2d3748;
+  --light1: #f4f3f1;
+  --med1: #7f8ea1;
+
+  --accent1: #7ca8a1;
+  --accent1: #9775ad;
+
+  --ui-padding1: 0.5rem;
+}
+
+body {
+  font-family: monospace;
+  background-color: var(--dark2);
+  color: var(--light1);
+  padding: 0;
+  margin: var(--ui-padding1);
+}
+
+.ui-element {
+  border: 1px solid var(--light1);
+  color: var(--light1);
+  padding: var(--ui-padding1);
+}
+
+button {
+  background-color: var(--light1);
+  border: 1px solid var(--dark1);
+  box-shadow: var(--med1) -1px 1px;
+  color: var(--dark1);
+  padding: var(--ui-padding1);
+}
+
+button:active {
+  background-color: #e0e3e1;
+  transform: translateX(-1px) translateY(1px);
+  box-shadow: none;
+}
+
+#app {
+  display:contents;
+}
