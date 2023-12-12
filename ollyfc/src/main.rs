@@ -7,6 +7,7 @@
 ///
 /// TIM4 - task dispatcher
 /// TIM5 - task dispatcher
+/// TIM11 - task dispatcher
 /// TIM1 - timer for flash memory access
 /// TIM2 - timer for mpu6050
 /// TIM3 - PWM timer
@@ -37,7 +38,7 @@ use stm32f4xx_hal::{
     gpio::{Output, Pin},
     otg_fs::{UsbBus, UsbBusType, USB},
     pac::{DMA2, I2C1, USART1},
-    pac::{TIM10, TIM3},
+    pac::{TIM10, TIM11, TIM3},
     prelude::*,
     serial::{Config, Rx},
     spi::{Mode, Phase, Polarity, Spi},
@@ -90,6 +91,9 @@ mod w25q;
 
 // Crate
 use w25q::W25Q;
+
+type FlashPage = [u8; 256];
+const USB_CH_SZ: usize = 4;
 
 /******************************************************************************/
 
@@ -185,6 +189,9 @@ mod app {
         // Channel for log data
         let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
 
+        // Channel for USB data
+        let (usb_ch_s, usb_ch_r) = make_channel!(FlashPage, USB_CH_SZ);
+
         // Sbus In: receiving flight commands
         debug!("sbus in: serial...");
         let mut sbus_in: Rx<USART1, u8> = dp
@@ -273,7 +280,8 @@ mod app {
                 }
             }
             info!("USB connection established.");
-            usb_task::spawn().unwrap();
+            usb_send_task::spawn(usb_ch_r).unwrap();
+            usb_task::spawn(usb_ch_s).unwrap();
         } else {
             info!("Flight mode initiated. Ignoring USB connection.");
             primary_flight_loop_task::spawn(log_ch_s).unwrap();
@@ -313,14 +321,20 @@ mod app {
 
     /// Primary task for managing USB reading and writing
     #[task(priority = 1, shared=[usb_dev, usb_ser, mem])]
-    async fn usb_task(mut cx: usb_task::Context) {
-        usb::usb_task_fn(&mut cx).await;
+    async fn usb_task(
+        mut cx: usb_task::Context,
+        mut usb_ch_s: Sender<'static, FlashPage, USB_CH_SZ>,
+    ) {
+        usb::usb_task_fn(&mut cx, &mut usb_ch_s).await;
     }
 
     /// Task for sending data to host over USB
-    #[task(priority = 1, shared=[usb_dev, usb_ser, mem])]
-    async fn usb_send_task(mut cx: usb_send_task::Context) {
-        usb::usb_send_task_fn(&mut cx).await;
+    #[task(priority = 1, shared=[usb_dev, usb_ser])]
+    async fn usb_send_task(
+        mut cx: usb_send_task::Context,
+        usb_ch_r: Receiver<'static, FlashPage, USB_CH_SZ>,
+    ) {
+        usb::usb_send_task_fn(&mut cx, usb_ch_r).await;
     }
 
     #[task(priority = 3, shared=[flight_controls, gyro], local=[elevator_channel])]
@@ -336,7 +350,7 @@ mod app {
         cx: log_write_task::Context,
         log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
-        crate::flight_logger::log_write(cx, log_ch_r).await;
+        crate::flight_logger::log_write_task_fn(cx, log_ch_r).await;
     }
 
     #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]

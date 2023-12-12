@@ -28,7 +28,7 @@ impl<T: FlashMem> FlightLogger<T> {
     }
 
     pub fn log(&mut self, data: &[FlightLogData; 8]) {
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; LOG_PAGE_SIZE];
         for (i, log) in data.iter().enumerate() {
             buf[i * LOG_SIZE..(i + 1) * LOG_SIZE].copy_from_slice(&log.to_bytes());
         }
@@ -48,7 +48,7 @@ impl<T: FlashMem> FlightLogger<T> {
     }
 }
 
-pub async fn log_write(
+pub async fn log_write_task_fn(
     mut cx: crate::app::log_write_task::Context<'_>,
     mut log_ch_r: rtic_sync::channel::Receiver<
         'static,

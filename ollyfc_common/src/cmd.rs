@@ -9,16 +9,18 @@ pub enum Command {
     GetFlashData,
     GetFlashDataByBlock,
     EraseFlash,
+    Invalid,
 }
 
 impl Command {
-    pub fn from_byte(byte: u8) -> Option<Self> {
+    pub fn from_byte(byte: u8) -> Self {
         match byte {
-            0x06 => Some(Command::Acknowledge),
-            0x07 => Some(Command::GetFlashData),
-            0x08 => Some(Command::GetFlashDataByBlock),
-            0x09 => Some(Command::EraseFlash),
-            _ => None,
+            0x06 => Command::Acknowledge,
+            0x07 => Command::GetFlashData,
+            0x08 => Command::GetFlashDataByBlock,
+            0x09 => Command::EraseFlash,
+            0x00 => Command::Invalid,
+            _ => Command::Invalid,
         }
     }
     pub fn to_byte(&self) -> u8 {
@@ -27,6 +29,7 @@ impl Command {
             Command::GetFlashData => 0x07,
             Command::GetFlashDataByBlock => 0x08,
             Command::EraseFlash => 0x09,
+            Command::Invalid => 0x00,
         }
     }
     pub fn from_str(cmdstr: &str) -> Option<Self> {
@@ -35,6 +38,7 @@ impl Command {
             "getflash" => Some(Command::GetFlashData),
             "getbyblock" => Some(Command::GetFlashDataByBlock),
             "erase" => Some(Command::EraseFlash),
+            "invalid" => Some(Command::Invalid),
             _ => None,
         }
     }
@@ -44,6 +48,7 @@ impl Command {
             Command::GetFlashData => "getflash",
             Command::GetFlashDataByBlock => "getbyblock",
             Command::EraseFlash => "erase",
+            Command::Invalid => "invalid",
         }
     }
 }

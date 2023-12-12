@@ -79,6 +79,17 @@ pub fn search_for_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> 
     }
 }
 
+#[tauri::command]
+pub fn disconnect_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> {
+    info!("Disconnecting USB device...");
+    let mut usb_device = (*usb_state).0.lock().unwrap();
+    if let Some(dev) = usb_device.as_mut() {
+        dev.serial_port = None;
+    }
+    *usb_device = None;
+    Ok(false)
+}
+
 /******************************************************************************/
 
 fn find_fc() -> Option<FcUsbDevice> {

@@ -11,22 +11,26 @@
   };
 </script>
 
-<div class="ui-element dev-cmd">
-  {#if $usb}
-    <button
-      on:click={() => {
-        sendCmd("ack");
-      }}>Send Acknowledge</button
-    >
-  {:else}
-    <p>Not connected</p>
-  {/if}
-
-  device commands
+<div class="ui-element1 dev-cmd">
+  <div class="ui-heading">
+    <h3>Device Commands</h3>
+  </div>
+  <div class="ui-element2">
+    {#if $usb}
+      <button
+        on:click={() => {
+          sendCmd("ack");
+        }}>Send Acknowledge</button
+      >
+    {:else}
+      <p>Not connected</p>
+    {/if}
+  </div>
 </div>
 
 <style>
   .dev-cmd {
-    flex-grow: 1;
+    width: 12em;
+    flex-shrink: 0;
   }
 </style>

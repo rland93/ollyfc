@@ -1,6 +1,7 @@
 <script lang="ts">
   import DeviceCmd from "./lib/DeviceCmd.svelte";
   import UsbState from "./lib/UsbState.svelte";
+  import DeviceIo from "./lib/DeviceIO.svelte";
 </script>
 
 <main class="ui-container">
@@ -9,6 +10,7 @@
   </div>
   <div class="main-window">
     <DeviceCmd />
+    <DeviceIo />
   </div>
 </main>
 
@@ -23,6 +25,8 @@
   .main-window {
     flex-grow: 1;
     display: flex;
+    flex-direction: row;
+    gap: var(--ui-padding1);
   }
 
   .top-area {
