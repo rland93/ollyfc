@@ -8,7 +8,7 @@ pub const BAUD_RATE: usize = 115200;
 pub enum Command {
     Acknowledge,
     GetFlashDataInfo,
-    GetFlashData,
+    GetLogData,
     GetFlashDataByBlock,
     EraseFlash,
     Invalid,
@@ -19,7 +19,7 @@ impl Display for Command {
         let cmdstr = match self {
             Command::Acknowledge => "ack",
             Command::GetFlashDataInfo => "getflashinfo",
-            Command::GetFlashData => "getflash",
+            Command::GetLogData => "getflash",
             Command::GetFlashDataByBlock => "getbyblock",
             Command::EraseFlash => "erase",
             Command::Invalid => "invalid",
@@ -33,7 +33,7 @@ impl Command {
         match byte {
             0x06 => Command::Acknowledge,
             0x07 => Command::GetFlashDataInfo,
-            0x08 => Command::GetFlashData,
+            0x08 => Command::GetLogData,
             0x09 => Command::GetFlashDataByBlock,
             0x0A => Command::EraseFlash,
             0x00 => Command::Invalid,
@@ -44,7 +44,7 @@ impl Command {
         match self {
             Command::Acknowledge => 0x06,
             Command::GetFlashDataInfo => 0x07,
-            Command::GetFlashData => 0x08,
+            Command::GetLogData => 0x08,
             Command::GetFlashDataByBlock => 0x09,
             Command::EraseFlash => 0x0A,
             Command::Invalid => 0x00,
@@ -54,7 +54,7 @@ impl Command {
         match cmdstr {
             "ack" => Some(Command::Acknowledge),
             "getflashinfo" => Some(Command::GetFlashDataInfo),
-            "getflash" => Some(Command::GetFlashData),
+            "getflash" => Some(Command::GetLogData),
             "getbyblock" => Some(Command::GetFlashDataByBlock),
             "erase" => Some(Command::EraseFlash),
             "invalid" => Some(Command::Invalid),
@@ -65,7 +65,7 @@ impl Command {
         match self {
             Command::Acknowledge => "ack",
             Command::GetFlashDataInfo => "getflashinfo",
-            Command::GetFlashData => "getflash",
+            Command::GetLogData => "getflash",
             Command::GetFlashDataByBlock => "getbyblock",
             Command::EraseFlash => "erase",
             Command::Invalid => "invalid",

@@ -80,6 +80,17 @@ pub fn send_usb_command(
                         Err("No serial port".to_string())
                     }
                 }
+                Command::GetLogData => {
+                    info!("Sending get log data");
+                    if let Some(port) = &mut dev.serial_port {
+                        let cmd = Command::GetLogData.to_byte();
+                        port.write(&[cmd]).unwrap();
+                        port.flush().unwrap();
+                        Ok(())
+                    } else {
+                        Err("No serial port".to_string())
+                    }
+                }
                 _ => Err("Invalid command".to_string()),
             },
             _ => Err("Invalid command data".to_string()),
