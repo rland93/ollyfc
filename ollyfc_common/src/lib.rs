@@ -1,6 +1,7 @@
 #![cfg_attr(feature = "defmt", no_std)]
 
 pub mod cmd;
+pub mod log;
 
 use core::convert::TryInto;
 
