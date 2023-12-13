@@ -146,6 +146,7 @@ impl From<SpiE> for MemError<SpiE> {
 
 pub trait FlashMem {
     fn page_size(&self) -> u32;
+    fn sector_size(&self) -> u32;
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>>;
     fn page_program(&mut self, address: u32, buf: &[u8; 256]) -> Result<(), MemError<SpiE>>;
     fn sector_erase(&mut self, address: u32) -> Result<(), MemError<SpiE>>;
@@ -167,6 +168,10 @@ impl W25Q {
 
     pub fn page_size(&self) -> u32 {
         PAGE_SIZE
+    }
+
+    pub fn sector_size(&self) -> u32 {
+        SECTOR_SIZE
     }
 
     pub fn wait_busy(&mut self) -> Result<(), MemError<SpiE>> {
@@ -363,6 +368,10 @@ impl W25Q {
 impl FlashMem for W25Q {
     fn page_size(&self) -> u32 {
         self.page_size()
+    }
+
+    fn sector_size(&self) -> u32 {
+        self.sector_size()
     }
 
     fn read(&mut self, address: u32, buf: &mut [u8]) -> Result<(), MemError<SpiE>> {

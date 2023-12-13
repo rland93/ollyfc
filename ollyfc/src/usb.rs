@@ -1,4 +1,5 @@
 use defmt::{error, info};
+use ollyfc_common::log::LogInfoPage;
 use ollyfc_common::{cmd::Command, FlightLogData};
 use rtic::{mutex_prelude::TupleExt02, Mutex};
 use rtic_sync::channel::Sender;
@@ -7,8 +8,6 @@ use usb_device::{
     class_prelude::UsbBusAllocator,
     device::{StringDescriptors, UsbDevice, UsbDeviceBuilder, UsbVidPid},
 };
-
-use crate::{w25q::W25Q, FlashPage};
 
 #[allow(non_snake_case)]
 pub fn usb_setup(
@@ -60,6 +59,16 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
                     info!("Received acknowledge");
                     ser.write(&[Command::Acknowledge.to_byte()]).unwrap();
                 }
+                Command::GetFlashDataInfo => {
+                    info!("Received get flash data info");
+                    let info = cx.shared.logger.lock(|logger| logger.read_info_page());
+                    let mut info_buf: [u8; 128] = [0u8; 128];
+                    info.to_bytes().iter().enumerate().for_each(|(i, b)| {
+                        info_buf[i] = *b;
+                    });
+                    ser.write(&info_buf).unwrap();
+                }
+
                 _ => {
                     error!("Command not implemented");
                 }
