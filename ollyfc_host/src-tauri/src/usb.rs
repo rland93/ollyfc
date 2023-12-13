@@ -1,8 +1,9 @@
 use log::{info, warn};
-use ollyfc_common::cmd::{Command, BAUD_RATE};
+use ollyfc_common::cmd::Command;
 use rusb::{Device, DeviceDescriptor, GlobalContext};
 use serialport::SerialPort;
 use serialport::{available_ports, SerialPortType};
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 // from crate
@@ -36,8 +37,23 @@ impl FcUsbDevice {
 /******************************************************************************/
 
 #[tauri::command]
-pub fn send_usb_command(usb_state: State<UsbDeviceState>, cmd: &str) -> Result<(), String> {
+pub fn send_usb_command(
+    usb_state: State<UsbDeviceState>,
+    current_cmd: State<Arc<Mutex<Command>>>,
+    cmd: &str,
+) -> Result<(), String> {
     let mut usb_device = usb_state.0.lock().unwrap();
+
+    // update the current command so that when we read back we know what we sent
+    {
+        let mut current_cmd = current_cmd.lock().unwrap();
+        *current_cmd = match Command::from_str(cmd) {
+            Some(cmd) => cmd,
+            None => return Err("Invalid command".to_string()),
+        };
+        info!("Current command: {:?}", *current_cmd);
+    }
+
     info!("Sending USB command: {}", cmd);
     if let Some(dev) = usb_device.as_mut() {
         match Command::from_str(cmd) {
@@ -46,6 +62,17 @@ pub fn send_usb_command(usb_state: State<UsbDeviceState>, cmd: &str) -> Result<(
                     info!("Sending acknowledge");
                     if let Some(port) = &mut dev.serial_port {
                         let cmd = Command::Acknowledge.to_byte();
+                        port.write(&[cmd]).unwrap();
+                        port.flush().unwrap();
+                        Ok(())
+                    } else {
+                        Err("No serial port".to_string())
+                    }
+                }
+                Command::GetFlashDataInfo => {
+                    info!("Sending get flash data info");
+                    if let Some(port) = &mut dev.serial_port {
+                        let cmd = Command::GetFlashDataInfo.to_byte();
                         port.write(&[cmd]).unwrap();
                         port.flush().unwrap();
                         Ok(())
