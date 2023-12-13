@@ -1,6 +1,9 @@
 use defmt::Format;
 use rtic::Mutex;
-use rtic_monotonics::{systick::ExtU32, Monotonic};
+use rtic_monotonics::{
+    systick::{ExtU32, Systick},
+    Monotonic,
+};
 
 use ollyfc_common::{ControlPolicy, FlightLogData, SBusInput, SensorInput};
 
@@ -77,7 +80,7 @@ pub async fn flight_loop(
 
         // Send data to logger
         let log_data = FlightLogData {
-            timestamp: 0,
+            timestamp: Systick::now().ticks(),
             sbus_input: SBusInput {
                 throttle: controls.throttle,
                 aileron: controls.aileron,
