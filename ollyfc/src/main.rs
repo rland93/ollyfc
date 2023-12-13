@@ -108,9 +108,6 @@ mod app {
         // Serial
         sbus_rx_transfer: SbusInTransfer,
         flight_controls: sbus::FlightControls,
-        // USB
-        usb_dev: UsbDevice<'static, UsbBus<USB>>,
-        usb_ser: SerialPort<'static, UsbBus<USB>>,
         // Memory
         mem: W25Q,
     }
@@ -123,6 +120,9 @@ mod app {
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
         mpu6050: Mpu6050<i2c::I2c<I2C1>>,
         mpu6050_int: Pin<'B', 8>,
+        // USB
+        usb_dev: UsbDevice<'static, UsbBus<USB>>,
+        usb_ser: SerialPort<'static, UsbBus<USB>>,
         // Sbus In
         sbus_rx_buffer: Option<&'static mut [u8; SBUS_BUF_SZ]>,
     }
@@ -188,9 +188,6 @@ mod app {
 
         // Channel for log data
         let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
-
-        // Channel for USB data
-        let (usb_ch_s, usb_ch_r) = make_channel!(FlashPage, USB_CH_SZ);
 
         // Sbus In: receiving flight commands
         debug!("sbus in: serial...");
@@ -280,8 +277,7 @@ mod app {
                 }
             }
             info!("USB connection established.");
-            usb_send_task::spawn(usb_ch_r).unwrap();
-            usb_task::spawn(usb_ch_s).unwrap();
+            usb_task::spawn().unwrap();
         } else {
             info!("Flight mode initiated. Ignoring USB connection.");
             primary_flight_loop_task::spawn(log_ch_s).unwrap();
@@ -293,8 +289,6 @@ mod app {
                 gyro: SensorInput::default(),
                 sbus_rx_transfer: sbus_in_transfer,
                 flight_controls: sbus::FlightControls::default(),
-                usb_dev: usb_dev,
-                usb_ser: usb_ser,
                 mem: mem,
             },
             Local {
@@ -303,6 +297,8 @@ mod app {
                 log_grp_idx: 0,
                 mpu6050: mpu,
                 mpu6050_int: mpu_int,
+                usb_dev: usb_dev,
+                usb_ser: usb_ser,
                 sbus_rx_buffer: Some(sbus_in_buffer_B),
             },
         )
@@ -319,22 +315,10 @@ mod app {
         }
     }
 
-    /// Primary task for managing USB reading and writing
-    #[task(priority = 1, shared=[usb_dev, usb_ser, mem])]
-    async fn usb_task(
-        mut cx: usb_task::Context,
-        mut usb_ch_s: Sender<'static, FlashPage, USB_CH_SZ>,
-    ) {
-        usb::usb_task_fn(&mut cx, &mut usb_ch_s).await;
-    }
-
-    /// Task for sending data to host over USB
-    #[task(priority = 1, shared=[usb_dev, usb_ser])]
-    async fn usb_send_task(
-        mut cx: usb_send_task::Context,
-        usb_ch_r: Receiver<'static, FlashPage, USB_CH_SZ>,
-    ) {
-        usb::usb_send_task_fn(&mut cx, usb_ch_r).await;
+    /// Task for managing the USB connection
+    #[task(priority = 1, shared=[mem], local=[usb_dev, usb_ser])]
+    async fn usb_task(mut cx: usb_task::Context) {
+        usb::usb_task_fn(&mut cx).await;
     }
 
     #[task(priority = 3, shared=[flight_controls, gyro], local=[elevator_channel])]
