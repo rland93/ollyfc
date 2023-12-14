@@ -5,11 +5,12 @@ use log::{debug, error, info, warn};
 use ollyfc_common::cmd::Command;
 
 use serde::Serialize;
+use serialport::SerialPort;
 use std::{
     sync::{Arc, Mutex},
     thread,
 };
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 // Modules
 mod usb;
 
@@ -54,59 +55,12 @@ fn main() {
                 let mut read_buf = [0u8; 128];
                 loop {
                     let mut maybe_device = listener_dev.0.lock().unwrap();
+                    let current = listener_current_cmd.lock().unwrap().clone();
+
                     if let Some(ref mut usb_device) = *maybe_device {
                         // Read from `usb_device.serial_port` if available
                         if let Some(ref mut ser) = usb_device.serial_port {
-                            let count = match ser.bytes_to_read() {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    warn!("Error getting bytes to read: {}", e);
-                                    match listener_app_handle.emit("usb-disconnect", None::<String>)
-                                    {
-                                        Ok(_) => (),
-                                        Err(e) => error!("Error emitting event: {}", e),
-                                    };
-                                    continue;
-                                }
-                            };
-                            if count == 0 {
-                                continue;
-                            }
-                            info!("Bytes to read: {}", count);
-
-                            let read_count = match ser.read(&mut read_buf) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    warn!("Error reading from serialport: {}", e);
-                                    match listener_app_handle.emit("usb-disconnect", None::<String>)
-                                    {
-                                        Ok(_) => (),
-                                        Err(e) => error!("Error emitting event: {}", e),
-                                    };
-                                    continue;
-                                }
-                            };
-
-                            info!("Read {} bytes", read_count);
-
-                            if read_count > 0 {
-                                let data = &read_buf[..read_count];
-                                debug!("Data: {:?}", data);
-                                let data_str = format!("{:?}", data);
-                                match listener_app_handle.emit(
-                                    "usb-data",
-                                    UsbDataDisplay {
-                                        cmd: listener_current_cmd.lock().unwrap().to_string(),
-                                        data: data_str.to_string(),
-                                    },
-                                ) {
-                                    Ok(_) => {
-                                        info!("Emitted event {}", data_str);
-                                        ()
-                                    }
-                                    Err(e) => error!("Error emitting event: {}", e),
-                                };
-                            }
+                            handle_serial_listen(&listener_app_handle, ser, current, &mut read_buf)
                         }
                         // usb disconnected
                     }
@@ -118,4 +72,60 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn handle_serial_listen(
+    app_handle: &AppHandle,
+    ser: &mut Box<dyn SerialPort>,
+    cmd: Command,
+    read_buf: &mut [u8; 128],
+) {
+    let count = match ser.bytes_to_read() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Error getting bytes to read: {}", e);
+            match app_handle.emit("usb-disconnect", None::<String>) {
+                Ok(_) => (),
+                Err(e) => error!("Error emitting event: {}", e),
+            };
+            return;
+        }
+    };
+    if count == 0 {
+        return;
+    }
+    info!("Bytes to read: {}", count);
+
+    let read_count = match ser.read(read_buf) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Error reading from serialport: {}", e);
+            match app_handle.emit("usb-disconnect", None::<String>) {
+                Ok(_) => (),
+                Err(e) => error!("Error emitting event: {}", e),
+            };
+            return;
+        }
+    };
+
+    info!("Read {} bytes", read_count);
+
+    if read_count > 0 {
+        let data = &read_buf[..read_count];
+        debug!("Data: {:?}", data);
+        let data_str = format!("{:?}", data);
+        match app_handle.emit(
+            "usb-data",
+            UsbDataDisplay {
+                cmd: cmd.to_string(),
+                data: data_str.to_string(),
+            },
+        ) {
+            Ok(_) => {
+                info!("Emitted event {}", data_str);
+                ()
+            }
+            Err(e) => error!("Error emitting event: {}", e),
+        };
+    }
 }
