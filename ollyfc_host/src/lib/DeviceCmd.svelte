@@ -25,7 +25,7 @@
       <button
         on:click={() => {
           sendCmd("getflashinfo");
-        }}>Get Flash Info</button
+        }}>Get Info</button
       >
       <button
         on:click={() => {

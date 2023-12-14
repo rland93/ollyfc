@@ -66,18 +66,34 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
                 Command::GetFlashDataInfo => {
                     info!("Received get flash data info");
                     let info = cx.shared.logger.lock(|logger| logger.read_info_page());
-                    let mut info_buf: [u8; 128] = [0u8; 128];
-                    info.to_bytes().iter().enumerate().for_each(|(i, b)| {
-                        info_buf[i] = *b;
-                    });
-                    ser.write(&info_buf).unwrap();
+
+                    while !ser.rts() {
+                        Systick::delay(1u32.millis()).await;
+                    }
+                    let nbytes = match ser.write(&info.to_bytes()) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            error!("Write buffer is full");
+                            panic!("Write buffer is full");
+                        }
+                    };
+                    match ser.flush() {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("Write buffer is full");
+                        }
+                    };
                 }
                 Command::GetLogData => {
                     info!("Received get log data");
                     let mut ct: u32 = 0;
                     let mut data: [u8; LOG_SIZE] = [0u8; LOG_SIZE];
-                    loop {
-                        debug!("{} Readout {}", Systick::now().ticks(), ct);
+
+                    let info = cx.shared.logger.lock(|logger| logger.read_info_page());
+                    let total = info.n_logs_in_region();
+
+                    while ct < total {
+                        debug!("{}: {}/{}", Systick::now().ticks(), ct, total);
                         match cx.shared.logger.lock(|logger| {
                             let addr = logger.block_start_ptr() + ct * LOG_SIZE as u32;
                             logger.mem.read(addr, &mut data)?;
@@ -91,13 +107,11 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
                             },
                         }
 
-                        debug!("{} Wait for ser {}", Systick::now().ticks(), ct);
                         // delay until rts
                         while !ser.rts() {
                             Systick::delay(1u32.millis()).await;
                         }
 
-                        debug!("{} Write/flush {}", Systick::now().ticks(), ct);
                         let nbytes = match ser.write(&data) {
                             Ok(n) => n,
                             Err(e) => {
@@ -108,7 +122,7 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
                         match ser.flush() {
                             Ok(_) => {}
                             Err(e) => {
-                                warn!("Write buffer is full");
+                                // warn!("Write buffer is full");
                             }
                         };
                         ct += 1;

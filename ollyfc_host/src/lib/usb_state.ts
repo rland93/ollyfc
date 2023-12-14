@@ -9,6 +9,12 @@ export type UsbDataDisplay = {
   data: string;
 };
 
+export type LogDumpProgress = {
+  current: number;
+  total: number;
+};
+
+
 
 /***** Stores *****/
 

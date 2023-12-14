@@ -30,3 +30,11 @@ export type FlightLogData = {
   sensorInput: SensorInput;
   controlPolicy: ControlPolicy;
 };
+
+export type LogInfoPage = {
+  blockStartPtr: number;
+  blockEndPtr: number;
+  blockSize: number;
+  nBlocks: number;
+  currentPage: number;
+};
