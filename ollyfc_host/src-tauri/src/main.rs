@@ -3,6 +3,7 @@
 
 use log::{debug, error, info, warn};
 use ollyfc_common::cmd::Command;
+use ollyfc_common::{FlightLogData, LOG_SIZE};
 
 use serde::Serialize;
 use serialport::SerialPort;
@@ -54,17 +55,48 @@ fn main() {
             thread::spawn(move || {
                 let mut read_buf = [0u8; 128];
                 loop {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+
                     let mut maybe_device = listener_dev.0.lock().unwrap();
                     let current = listener_current_cmd.lock().unwrap().clone();
 
                     if let Some(ref mut usb_device) = *maybe_device {
                         // Read from `usb_device.serial_port` if available
                         if let Some(ref mut ser) = usb_device.serial_port {
-                            handle_serial_listen(&listener_app_handle, ser, current, &mut read_buf)
+                            // read bytes. could be 0 if no bytes to be read but this way we handle
+                            // the serialport disconnection cases so that the ui is updated in a
+                            // timely manner.
+                            let read_count =
+                                ser_read_bytes(&listener_app_handle, ser, current, &mut read_buf);
+
+                            // continue if no bytes are to be read.
+                            if read_count == 0 {
+                                continue;
+                            }
+
+                            // we have bytes
+                            match current {
+                                Command::Acknowledge => {
+                                    warn!("No implementation");
+                                }
+                                Command::GetLogData => {
+                                    deser_log_data(
+                                        read_count,
+                                        &read_buf,
+                                        &listener_app_handle,
+                                        current,
+                                    );
+                                }
+                                Command::GetFlashDataInfo => {
+                                    warn!("No implementation");
+                                }
+                                _ => {
+                                    warn!("No implementation");
+                                }
+                            }
                         }
                         // usb disconnected
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             });
 
@@ -74,12 +106,12 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-fn handle_serial_listen(
+fn ser_read_bytes(
     app_handle: &AppHandle,
     ser: &mut Box<dyn SerialPort>,
     cmd: Command,
     read_buf: &mut [u8; 128],
-) {
+) -> usize {
     let count = match ser.bytes_to_read() {
         Ok(c) => c,
         Err(e) => {
@@ -88,11 +120,11 @@ fn handle_serial_listen(
                 Ok(_) => (),
                 Err(e) => error!("Error emitting event: {}", e),
             };
-            return;
+            return 0;
         }
     };
     if count == 0 {
-        return;
+        return 0;
     }
     info!("Bytes to read: {}", count);
 
@@ -104,25 +136,54 @@ fn handle_serial_listen(
                 Ok(_) => (),
                 Err(e) => error!("Error emitting event: {}", e),
             };
-            return;
+            return 0;
         }
     };
 
     info!("Read {} bytes", read_count);
+    return read_count;
+}
 
-    if read_count > 0 {
-        let data = &read_buf[..read_count];
+fn deser_log_data(read_count: usize, read_buf: &[u8], app_handle: &AppHandle, cmd: Command) {
+    if read_count % LOG_SIZE != 0 {
+        warn!(
+            "Read count {} not an integer multiple of LOG_SIZE {}",
+            read_count, LOG_SIZE
+        );
+        return;
+    }
+
+    for i in 0..read_count / LOG_SIZE {
+        info!("Read log {} of {} in buffer", i, read_count / LOG_SIZE);
+
+        let data: &[u8; LOG_SIZE] = &read_buf[i * LOG_SIZE..(i + 1) * LOG_SIZE]
+            .try_into()
+            // should never hit
+            .expect("Buffer size mismatch.");
+
         debug!("Data: {:?}", data);
-        let data_str = format!("{:?}", data);
+        let logdata = FlightLogData::from_bytes(data);
+        let logdata_json = match serde_json::to_string(&logdata) {
+            Ok(s) => s,
+            Err(e) => {
+                error!(
+                    "Serialization of FlightLogData type to json failed: {:?}",
+                    logdata
+                );
+                error!("Error serializing LogData: {}", e);
+                return;
+            }
+        };
+
         match app_handle.emit(
             "usb-data",
             UsbDataDisplay {
                 cmd: cmd.to_string(),
-                data: data_str.to_string(),
+                data: logdata_json,
             },
         ) {
             Ok(_) => {
-                info!("Emitted event {}", data_str);
+                info!("Emitted usb-data event with cmd: {}", cmd);
                 ()
             }
             Err(e) => error!("Error emitting event: {}", e),
