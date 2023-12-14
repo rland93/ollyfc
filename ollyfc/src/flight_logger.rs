@@ -10,6 +10,7 @@ use ollyfc_common::{FlightLogData, LOG_SIZE};
 // size of the log item, in bytes
 pub const LOG_PAGE_SIZE: usize = crate::w25q::PAGE_SIZE as usize;
 pub const LOGS_IN_PAGE: usize = LOG_PAGE_SIZE / LOG_SIZE;
+pub const INFO_SECTOR_ADDR: u32 = 0x00;
 
 pub struct FlightLogger<T: FlashMem> {
     pub mem: T,
@@ -84,11 +85,7 @@ impl<T: FlashMem> FlightLogger<T> {
 
         match self.mem.page_program(0x00, &buf) {
             Ok(_) => (),
-            Err(e) => match e {
-                MemError::SpiError(_) => error!("SPI error"),
-                MemError::NotAlignedError => error!("Page not aligned"),
-                MemError::OutOfBoundsError => error!("Data out of bounds"),
-            },
+            Err(e) => log_mem_error(e),
         };
     }
 
@@ -96,20 +93,27 @@ impl<T: FlashMem> FlightLogger<T> {
         let mut buf = [0u8; LOG_PAGE_SIZE];
         match self.mem.read(0x00, &mut buf) {
             Ok(_) => (),
-            Err(e) => match e {
-                MemError::SpiError(_) => error!("SPI error"),
-                MemError::NotAlignedError => error!("Page not aligned"),
-                MemError::OutOfBoundsError => error!("Data out of bounds"),
-            },
+            Err(e) => log_mem_error(e),
         }
 
         return LogInfoPage::from_bytes(&buf);
     }
 
     pub fn log(&mut self, data: &[FlightLogData; LOGS_IN_PAGE]) {
-        // erase the sector before writing
+        // erase the sector ahead before writing
         if self.addr_ptr % self.mem.sector_size() as u32 == 0 {
-            self.mem.sector_erase(self.addr_ptr);
+            match self.mem.sector_erase(self.addr_ptr) {
+                Ok(_) => (),
+                Err(e) => log_mem_error(e),
+            }
+
+            // also write the address pointer
+            match self.mem.sector_erase(INFO_SECTOR_ADDR) {
+                Ok(_) => (),
+                Err(e) => log_mem_error(e),
+            }
+            // writes the current addr ptr.
+            self.write_info_page();
         }
 
         // serialize onto a page
@@ -163,7 +167,19 @@ impl<T: FlashMem> FlightLogger<T> {
             address,
             address + self.block_size
         );
-        self.mem.block64_erase(address);
+        match self.mem.block64_erase(address) {
+            Ok(_) => (),
+            Err(e) => log_mem_error(e),
+        };
+    }
+}
+
+/// Log a memory error
+fn log_mem_error(e: crate::w25q::MemError<stm32f4xx_hal::spi::Error>) {
+    match e {
+        MemError::SpiError(_) => error!("SPI error"),
+        MemError::NotAlignedError => error!("Page not aligned"),
+        MemError::OutOfBoundsError => error!("Data out of bounds"),
     }
 }
 

@@ -2,6 +2,7 @@
 #![no_std]
 #![feature(type_alias_impl_trait)]
 #![feature(generic_arg_infer)]
+#![feature(result_option_inspect)]
 
 /// Hardware
 ///
