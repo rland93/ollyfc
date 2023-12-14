@@ -23,7 +23,7 @@ log = "0.4"
 env_logger = "0.10"
 rusb = "0.9"
 serialport = "4.2.2"
-ollyfc_common = { path = "../../ollyfc_common"}
+ollyfc_common = { path = "../../ollyfc_common", features= ["std"] }
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

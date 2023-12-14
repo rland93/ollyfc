@@ -27,6 +27,11 @@
           sendCmd("getflashinfo");
         }}>Get Flash Info</button
       >
+      <button
+        on:click={() => {
+          sendCmd("getflash");
+        }}>Get Flash</button
+      >
     {:else}
       <p>Not connected</p>
     {/if}
