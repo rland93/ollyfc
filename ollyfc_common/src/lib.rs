@@ -124,7 +124,7 @@ impl FlightLogData {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8; LOG_SIZE]) -> Result<Self, &'static str> {
+    pub fn from_bytes(bytes: &[u8; LOG_SIZE]) -> Self {
         let timestamp = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
 
         let sbus_input = SBusInput {
@@ -153,12 +153,12 @@ impl FlightLogData {
             throttle: u16::from_be_bytes(bytes[48..50].try_into().unwrap()),
         };
 
-        Ok(Self {
+        Self {
             timestamp,
             sbus_input,
             sensor_input,
             control_policy,
-        })
+        }
     }
 
     pub fn default() -> Self {
