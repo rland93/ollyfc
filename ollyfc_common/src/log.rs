@@ -1,7 +1,12 @@
 #![cfg_attr(feature = "no_std", no_std)]
 
+#[cfg(feature = "std")]
+use serde::{Deserialize, Serialize};
+
+pub const LOG_INFO_SIZE: usize = 20;
 #[cfg_attr(feature = "no_std", derive(defmt::Format))]
-#[cfg_attr(feature = "std", derive(Debug, Clone, Copy, PartialEq))]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogInfoPage {
     pub block_start_ptr: u32, // address of first block
     pub block_end_ptr: u32,   // ending address of last block
@@ -27,6 +32,20 @@ impl LogInfoPage {
         }
     }
 
+    pub fn default() -> Self {
+        Self {
+            block_start_ptr: 0,
+            block_end_ptr: 0,
+            block_size: 0,
+            n_blocks: 0,
+            current_page: 0,
+        }
+    }
+
+    pub fn n_logs_in_region(&self) -> u32 {
+        self.n_blocks * self.block_size / crate::LOG_SIZE as u32
+    }
+
     pub fn from_bytes(bytes: &[u8]) -> Self {
         let mut block_start_ptr = [0u8; 4];
         let mut block_end_ptr = [0u8; 4];
@@ -48,8 +67,8 @@ impl LogInfoPage {
             current_page: u32::from_le_bytes(current_page),
         }
     }
-    pub fn to_bytes(&self) -> [u8; 20] {
-        let mut bytes = [0u8; 20];
+    pub fn to_bytes(&self) -> [u8; LOG_INFO_SIZE] {
+        let mut bytes = [0u8; LOG_INFO_SIZE];
         bytes[0..4].copy_from_slice(&self.block_start_ptr.to_le_bytes());
         bytes[4..8].copy_from_slice(&self.block_end_ptr.to_le_bytes());
         bytes[8..12].copy_from_slice(&self.block_size.to_le_bytes());

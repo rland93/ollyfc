@@ -2,12 +2,14 @@
   import DeviceCmd from "./lib/DeviceCmd.svelte";
   import UsbState from "./lib/UsbState.svelte";
   import DeviceIo from "./lib/DeviceIO.svelte";
+  import Dump from "./lib/Dump.svelte";
 </script>
 
 <main class="ui-container">
   <div class="top-area">
     <UsbState />
   </div>
+  <Dump />
   <div class="main-window">
     <DeviceCmd />
     <DeviceIo />

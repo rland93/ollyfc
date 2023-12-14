@@ -3,6 +3,7 @@
 
 use log::{debug, error, info, warn};
 use ollyfc_common::cmd::Command;
+use ollyfc_common::log::{LogInfoPage, LOG_INFO_SIZE};
 use ollyfc_common::{FlightLogData, LOG_SIZE};
 
 use serde::Serialize;
@@ -15,10 +16,16 @@ use tauri::{AppHandle, Manager};
 // Modules
 mod usb;
 
-#[derive(Clone, Serialize)]
-pub struct UsbDataDisplay {
+#[derive(Debug, Clone, Serialize)]
+pub struct EmitEvent {
     pub cmd: String,
     pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LogDumpProgress {
+    pub current: usize,
+    pub total: usize,
 }
 
 #[derive(Clone)]
@@ -54,6 +61,13 @@ fn main() {
             // Spawn listener
             thread::spawn(move || {
                 let mut read_buf = [0u8; 128];
+
+                // number of logs we've read so far
+                let mut log_progress: usize = 0;
+
+                // info about the log region
+                let mut info = LogInfoPage::default();
+
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(50));
 
@@ -86,9 +100,33 @@ fn main() {
                                         &listener_app_handle,
                                         current,
                                     );
+                                    log_progress += read_count / LOG_SIZE;
+                                    send_progress_event(
+                                        &LogDumpProgress {
+                                            current: log_progress,
+                                            total: info.n_logs_in_region() as usize,
+                                        },
+                                        &listener_app_handle,
+                                        current,
+                                    );
                                 }
                                 Command::GetFlashDataInfo => {
-                                    warn!("No implementation");
+                                    info!("Get Info {:?}", read_buf);
+                                    info = deser_read_info(
+                                        read_count,
+                                        &read_buf[0..LOG_INFO_SIZE],
+                                        &listener_app_handle,
+                                        current,
+                                    );
+                                    send_info_event(&info, &listener_app_handle, current);
+                                    send_progress_event(
+                                        &LogDumpProgress {
+                                            current: log_progress,
+                                            total: info.n_logs_in_region() as usize,
+                                        },
+                                        &listener_app_handle,
+                                        current,
+                                    );
                                 }
                                 _ => {
                                     warn!("No implementation");
@@ -177,7 +215,7 @@ fn deser_log_data(read_count: usize, read_buf: &[u8], app_handle: &AppHandle, cm
 
         match app_handle.emit(
             "usb-data",
-            UsbDataDisplay {
+            EmitEvent {
                 cmd: cmd.to_string(),
                 data: logdata_json,
             },
@@ -189,4 +227,83 @@ fn deser_log_data(read_count: usize, read_buf: &[u8], app_handle: &AppHandle, cm
             Err(e) => error!("Error emitting event: {}", e),
         };
     }
+}
+
+fn deser_read_info(
+    read_count: usize,
+    read_buf: &[u8],
+    app_handle: &AppHandle,
+    cmd: Command,
+) -> LogInfoPage {
+    if read_count != LOG_INFO_SIZE {
+        warn!(
+            "Read count {} not equal to expected info size 20",
+            read_count
+        );
+        return LogInfoPage::default();
+    }
+
+    let bytes: &[u8; LOG_INFO_SIZE] = &read_buf[0..LOG_INFO_SIZE]
+        .try_into()
+        // should never hit
+        .expect("Buffer size mismatch.");
+
+    debug!("Data: {:?}", bytes);
+    LogInfoPage::from_bytes(bytes)
+}
+
+fn send_info_event(info: &LogInfoPage, app_handle: &AppHandle, cmd: Command) {
+    let info_json = match serde_json::to_string(info) {
+        Ok(s) => s,
+        Err(e) => {
+            error!(
+                "Serialization of LogInfoPage type to json failed: {:?}",
+                info
+            );
+            error!("Error serializing LogInfoPage: {}", e);
+            return;
+        }
+    };
+
+    match app_handle.emit(
+        "info-data",
+        EmitEvent {
+            cmd: cmd.to_string(),
+            data: info_json,
+        },
+    ) {
+        Ok(_) => {
+            info!("Emitted info-data event with cmd: {}", cmd);
+            ()
+        }
+        Err(e) => error!("Error emitting event: {}", e),
+    };
+}
+
+fn send_progress_event(progress: &LogDumpProgress, app_handle: &AppHandle, cmd: Command) {
+    let progress_json = match serde_json::to_string(&progress) {
+        Ok(s) => s,
+        Err(e) => {
+            error!(
+                "Serialization of LogDumpProgress type to json failed: {:?}",
+                progress
+            );
+            error!("Error serializing LogDumpProgress: {}", e);
+            return;
+        }
+    };
+
+    match app_handle.emit(
+        "progress-data",
+        EmitEvent {
+            cmd: cmd.to_string(),
+            data: progress_json,
+        },
+    ) {
+        Ok(_) => {
+            info!("Emitted progress-data event with cmd: {}", cmd);
+            ()
+        }
+        Err(e) => error!("Error emitting event: {}", e),
+    };
 }

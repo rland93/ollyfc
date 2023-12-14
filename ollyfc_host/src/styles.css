@@ -44,7 +44,7 @@ body {
 }
 
 .ui-element1 {
-  border: 1px solid var(--light1);
+  border: 1px solid var(--med1);
   color: var(--light1);
   padding: var(--ui-padding1);
   border-radius: 6px;

@@ -3,6 +3,8 @@
   import { usb, searchUSB, type UsbDataDisplay } from "./usb_state";
   import { emit, listen, type Event } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
+  import type { FlightLogData } from "./flightTypes";
+  import type { EmitEvent } from "./appTypes";
 
   let recvd: string[] = [];
 
@@ -10,11 +12,15 @@
   onMount(async () => {
     const unlistenSerial = await listen(
       "usb-data",
-      (event: Event<UsbDataDisplay>) => {
+      (event: Event<EmitEvent>) => {
         // store data into recvd in a reactive way.
-        const newData: UsbDataDisplay = event.payload;
+        const emitted: EmitEvent = event.payload;
+        if (emitted.cmd === "getflash") {
+          let flightLogData: FlightLogData = JSON.parse(emitted.data);
+          console.log(emitted.data);
+        }
 
-        let disp = `${newData.cmd}: ${newData.data}`;
+        let disp = `${emitted.cmd}: ${emitted.data}`;
 
         recvd = [...recvd, disp];
       },
