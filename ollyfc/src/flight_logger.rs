@@ -73,6 +73,7 @@ impl<T: FlashMem> FlightLogger<T> {
             self.block_end_ptr,
             self.block_size,
             self.n_blocks,
+            self.addr_ptr,
         );
 
         let mut buf = [0u8; LOG_PAGE_SIZE];
