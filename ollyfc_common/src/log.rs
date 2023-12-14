@@ -48,8 +48,8 @@ impl LogInfoPage {
             current_page: u32::from_le_bytes(current_page),
         }
     }
-    pub fn to_bytes(&self) -> [u8; 16] {
-        let mut bytes = [0u8; 16];
+    pub fn to_bytes(&self) -> [u8; 20] {
+        let mut bytes = [0u8; 20];
         bytes[0..4].copy_from_slice(&self.block_start_ptr.to_le_bytes());
         bytes[4..8].copy_from_slice(&self.block_end_ptr.to_le_bytes());
         bytes[8..12].copy_from_slice(&self.block_size.to_le_bytes());
