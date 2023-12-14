@@ -1,10 +1,14 @@
-use core::fmt::Display;
+#![cfg_attr(feature = "no_std", no_std)]
+#[cfg(feature = "std")]
+use serde::{Deserialize, Serialize};
 
+use core::fmt::Display;
 pub const PACKET_SIZE: usize = 80;
 pub const BAUD_RATE: usize = 115200;
 
-#[cfg_attr(feature = "use_defmt", derive(defmt::Format))]
-#[cfg_attr(not(feature = "use_defmt"), derive(Debug, Clone, Copy, PartialEq))]
+#[cfg_attr(feature = "no_std", derive(defmt::Format))]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     Acknowledge,
     GetFlashDataInfo,

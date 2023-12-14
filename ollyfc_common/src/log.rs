@@ -1,5 +1,7 @@
-#[cfg_attr(feature = "use_defmt", derive(defmt::Format))]
-#[cfg_attr(not(feature = "use_defmt"), derive(Debug, Clone, Copy, PartialEq))]
+#![cfg_attr(feature = "no_std", no_std)]
+
+#[cfg_attr(feature = "no_std", derive(defmt::Format))]
+#[cfg_attr(feature = "std", derive(Debug, Clone, Copy, PartialEq))]
 pub struct LogInfoPage {
     pub block_start_ptr: u32,
     pub block_end_ptr: u32,
