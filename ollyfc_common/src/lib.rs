@@ -1,13 +1,16 @@
-#![cfg_attr(feature = "defmt", no_std)]
+#![cfg_attr(feature = "no_std", no_std)]
 
 pub mod cmd;
+pub mod log;
 
-use core::convert::TryInto;
+#[cfg(feature = "std")]
+use serde::{Deserialize, Serialize};
 
 pub const LOG_SIZE: usize = 64;
 
-#[cfg_attr(feature = "use_defmt", derive(defmt::Format))]
-#[cfg_attr(not(feature = "use_defmt"), derive(Debug, Clone, Copy))]
+#[cfg_attr(feature = "no_std", derive(defmt::Format))]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SensorInput {
     pub accel_x: f32,
     pub accel_y: f32,
@@ -30,8 +33,9 @@ impl SensorInput {
     }
 }
 
-#[cfg_attr(feature = "use_defmt", derive(defmt::Format))]
-#[cfg_attr(not(feature = "use_defmt"), derive(Debug, Clone, Copy))]
+#[cfg_attr(feature = "no_std", derive(defmt::Format))]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SBusInput {
     pub throttle: u16,
     pub aileron: u16,
@@ -56,8 +60,9 @@ impl SBusInput {
     }
 }
 
-#[cfg_attr(feature = "use_defmt", derive(defmt::Format))]
-#[cfg_attr(not(feature = "use_defmt"), derive(Debug, Clone, Copy))]
+#[cfg_attr(feature = "no_std", derive(defmt::Format))]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControlPolicy {
     pub elevator: u16,
     pub aileron: u16,
@@ -76,8 +81,9 @@ impl ControlPolicy {
     }
 }
 
-#[cfg_attr(feature = "use_defmt", derive(defmt::Format))]
-#[cfg_attr(not(feature = "use_defmt"), derive(Debug, Clone, Copy))]
+#[cfg_attr(feature = "no_std", derive(defmt::Format))]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlightLogData {
     pub timestamp: u32,
     pub sbus_input: SBusInput,
@@ -118,7 +124,7 @@ impl FlightLogData {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8; LOG_SIZE]) -> Result<Self, &'static str> {
+    pub fn from_bytes(bytes: &[u8; LOG_SIZE]) -> Self {
         let timestamp = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
 
         let sbus_input = SBusInput {
@@ -147,12 +153,12 @@ impl FlightLogData {
             throttle: u16::from_be_bytes(bytes[48..50].try_into().unwrap()),
         };
 
-        Ok(Self {
+        Self {
             timestamp,
             sbus_input,
             sensor_input,
             control_policy,
-        })
+        }
     }
 
     pub fn default() -> Self {

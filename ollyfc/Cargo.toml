@@ -22,7 +22,7 @@ mpu6050-dmp = { git= "https://github.com/barafael/mpu6050-dmp-rs.git"}
 usbd-serial = {version= "0.2.0"}
 usb-device = {version= "0.3.1"}
 
-ollyfc_common = { path = "../ollyfc_common", features=["defmt"]}
+ollyfc_common = { path = "../ollyfc_common", features=["no_std"]}
 
 [profile.dev]
 codegen-units = 1

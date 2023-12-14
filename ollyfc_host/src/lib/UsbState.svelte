@@ -24,17 +24,21 @@
   </div>
   <div class="state-items">
     <div class="ui-element2 state-option state-display">
-      USB: <span class:yes={$usb} class:no={!$usb}>{connected}</span><br />
-      {#if usb_disconnected}
-        <span class="no"
-          >USB was disconnected! <button
-            class="clear"
-            on:click={() => {
-              usb_disconnected = false;
-            }}>x</button
-          ></span
-        >
-      {/if}
+      <p>
+        USB: <span class:yes={$usb} class:no={!$usb}>{connected}</span>
+      </p>
+      <p>
+        {#if usb_disconnected}
+          <span class="no"
+            >USB was disconnected! <button
+              class="clear"
+              on:click={() => {
+                usb_disconnected = false;
+              }}>x</button
+            ></span
+          >
+        {/if}
+      </p>
     </div>
     <div class="ui-element2 state-option">
       <button on:click={searchUSB}>Search for FC</button>
@@ -46,11 +50,13 @@
 </div>
 
 <style>
-  clear {
+  .clear {
     background-color: transparent;
-    border: none;
+    box-shadow: none;
+    border: 1px solid var(--accent2);
     color: inherit;
-    padding: 0;
+    padding: 2px;
+    margin: 0;
     font: inherit;
     cursor: pointer;
     outline: inherit;
@@ -72,19 +78,23 @@
     align-items: stretch;
   }
 
+  .state-option p {
+    margin: 0;
+  }
+
   .yes {
     color: var(--accent1);
-    margin-left: var(--ui-padding2);
   }
   .no {
     color: var(--accent2);
-    margin-left: var(--ui-padding2);
   }
 
   .state-display {
     flex-grow: 1;
     display: flex;
-    align-items: stretch;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
     font-size: var(--ui-font-size1);
   }
 </style>

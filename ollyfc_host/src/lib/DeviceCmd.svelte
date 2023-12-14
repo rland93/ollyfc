@@ -20,7 +20,17 @@
       <button
         on:click={() => {
           sendCmd("ack");
-        }}>Send Acknowledge</button
+        }}>Ack</button
+      >
+      <button
+        on:click={() => {
+          sendCmd("getflashinfo");
+        }}>Get Flash Info</button
+      >
+      <button
+        on:click={() => {
+          sendCmd("getflash");
+        }}>Get Flash</button
       >
     {:else}
       <p>Not connected</p>

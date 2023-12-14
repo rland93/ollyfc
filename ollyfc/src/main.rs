@@ -2,6 +2,7 @@
 #![no_std]
 #![feature(type_alias_impl_trait)]
 #![feature(generic_arg_infer)]
+#![feature(result_option_inspect)]
 
 /// Hardware
 ///
@@ -38,7 +39,7 @@ use stm32f4xx_hal::{
     gpio::{Output, Pin},
     otg_fs::{UsbBus, UsbBusType, USB},
     pac::{DMA2, I2C1, USART1},
-    pac::{TIM10, TIM11, TIM3},
+    pac::{TIM10, TIM3},
     prelude::*,
     serial::{Config, Rx},
     spi::{Mode, Phase, Polarity, Spi},
@@ -104,12 +105,12 @@ mod app {
     #[shared]
     struct Shared {
         // Logging
+        logger: flight_logger::FlightLogger<W25Q>,
+        // Sensor
         gyro: SensorInput,
         // Serial
         sbus_rx_transfer: SbusInTransfer,
         flight_controls: sbus::FlightControls,
-        // Memory
-        mem: W25Q,
     }
 
     #[local]
@@ -188,6 +189,9 @@ mod app {
 
         // Channel for log data
         let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
+
+        // Flight logger setup
+        let logger = flight_logger::FlightLogger::new(mem, 1, 2);
 
         // Sbus In: receiving flight commands
         debug!("sbus in: serial...");
@@ -286,10 +290,10 @@ mod app {
 
         (
             Shared {
+                logger: logger,
                 gyro: SensorInput::default(),
                 sbus_rx_transfer: sbus_in_transfer,
                 flight_controls: sbus::FlightControls::default(),
-                mem: mem,
             },
             Local {
                 elevator_channel: elevator_channel,
@@ -316,7 +320,7 @@ mod app {
     }
 
     /// Task for managing the USB connection
-    #[task(priority = 1, shared=[mem], local=[usb_dev, usb_ser])]
+    #[task(priority = 1, shared=[logger], local=[usb_dev, usb_ser])]
     async fn usb_task(mut cx: usb_task::Context) {
         usb::usb_task_fn(&mut cx).await;
     }
@@ -329,7 +333,7 @@ mod app {
         crate::flight_control::flight_loop(cx, log_ch_s).await;
     }
 
-    #[task(local=[log_grp_idx, log_buffer], priority=1)]
+    #[task(local=[log_grp_idx, log_buffer], shared=[logger], priority=1)]
     async fn log_write_task(
         cx: log_write_task::Context,
         log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,

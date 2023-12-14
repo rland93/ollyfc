@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/primitives";
-  import { usb, searchUSB } from "./usb_state";
+  import { usb, searchUSB, type UsbDataDisplay } from "./usb_state";
   import { emit, listen, type Event } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
 
@@ -8,12 +8,17 @@
 
   // onmount create event listner
   onMount(async () => {
-    const unlistenSerial = await listen("usb-data", (event: Event<string>) => {
-      // store data into recvd in a reactive way.
-      const newData: string = event.payload;
+    const unlistenSerial = await listen(
+      "usb-data",
+      (event: Event<UsbDataDisplay>) => {
+        // store data into recvd in a reactive way.
+        const newData: UsbDataDisplay = event.payload;
 
-      recvd = [...recvd, newData];
-    });
+        let disp = `${newData.cmd}: ${newData.data}`;
+
+        recvd = [...recvd, disp];
+      },
+    );
   });
 
   const clearIoScreen = async () => {
