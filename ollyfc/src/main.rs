@@ -38,7 +38,7 @@ use stm32f4xx_hal::{
     gpio::{Output, Pin},
     otg_fs::{UsbBus, UsbBusType, USB},
     pac::{DMA2, I2C1, USART1},
-    pac::{TIM10, TIM11, TIM3},
+    pac::{TIM10, TIM3},
     prelude::*,
     serial::{Config, Rx},
     spi::{Mode, Phase, Polarity, Spi},

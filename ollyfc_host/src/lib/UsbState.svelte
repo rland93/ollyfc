@@ -72,19 +72,23 @@
     align-items: stretch;
   }
 
+  .state-option p {
+    margin: 0;
+  }
+
   .yes {
     color: var(--accent1);
-    margin-left: var(--ui-padding2);
   }
   .no {
     color: var(--accent2);
-    margin-left: var(--ui-padding2);
   }
 
   .state-display {
     flex-grow: 1;
     display: flex;
-    align-items: stretch;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2rem;
     font-size: var(--ui-font-size1);
   }
 </style>

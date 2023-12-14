@@ -1,4 +1,3 @@
-use defmt::Format;
 use rtic::Mutex;
 use rtic_monotonics::{
     systick::{ExtU32, Systick},
