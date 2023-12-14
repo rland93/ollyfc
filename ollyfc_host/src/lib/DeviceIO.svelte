@@ -6,7 +6,8 @@
   import type { FlightLogData } from "./flightTypes";
   import type { EmitEvent } from "./appTypes";
 
-  let recvd: string[] = [];
+  let view = false;
+  let recvd: FlightLogData[] = [];
 
   // onmount create event listner
   onMount(async () => {
@@ -17,12 +18,8 @@
         const emitted: EmitEvent = event.payload;
         if (emitted.cmd === "getflash") {
           let flightLogData: FlightLogData = JSON.parse(emitted.data);
-          console.log(emitted.data);
         }
-
-        let disp = `${emitted.cmd}: ${emitted.data}`;
-
-        recvd = [...recvd, disp];
+        recvd = [...recvd];
       },
     );
   });
@@ -39,17 +36,29 @@
   <div class="ui-element2 io-box">
     {#if $usb}
       <!-- list events in recvd-->
-      {#each recvd as e}
-        <p>{e}</p>
-      {/each}
+      {#if view}
+        {#each recvd as d}
+          <div class="log-item">
+            <span>{d.sensorInput.pitch} </span>
+            <span>{d.sensorInput.roll} </span>
+            <span>{d.sensorInput.yaw} </span>
+            <span>{d.sbusInput.throttle} </span>
+            <span>{d.sbusInput.elevator} </span>
+            <span>{d.sbusInput.aileron} </span>
+            <span>{d.sbusInput.rudder} </span>
+          </div>
+        {/each}
+      {/if}
     {/if}
   </div>
   <div class="ui-element2">
     <button
       on:click={() => {
         clearIoScreen();
-      }}>Clear</button
+      }}
     >
+      clear
+    </button>
   </div>
 </div>
 
@@ -57,6 +66,10 @@
   .io-box {
     flex: 1 1 1px;
     overflow-y: scroll;
+
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    grid-gap: 10px;
   }
   .dev-cmd {
     flex-grow: 3;
@@ -64,5 +77,8 @@
     gap: var(--ui-padding2);
     flex-direction: column;
     min-height: 12;
+  }
+  .log-item {
+    border-bottom: 1px solid var(--med3);
   }
 </style>
