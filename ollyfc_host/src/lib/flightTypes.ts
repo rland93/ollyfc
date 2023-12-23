@@ -1,7 +1,7 @@
 export type SensorInput = {
-  accelX: number;
-  accelY: number;
-  accelZ: number;
+  accel_x: number;
+  accel_y: number;
+  accel_z: number;
   pitch: number;
   yaw: number;
   roll: number;
@@ -26,9 +26,9 @@ export type ControlPolicy = {
 
 export type FlightLogData = {
   timestamp: number;
-  sbusInput: SBusInput;
-  sensorInput: SensorInput;
-  controlPolicy: ControlPolicy;
+  sbus_input: SBusInput;
+  sensor_input: SensorInput;
+  control_policy: ControlPolicy;
 };
 
 export type LogInfoPage = {

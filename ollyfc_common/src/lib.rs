@@ -4,7 +4,11 @@ pub mod cmd;
 pub mod log;
 
 #[cfg(feature = "std")]
+use csv::Writer;
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "std")]
+use std::error::Error;
 
 pub const LOG_SIZE: usize = 64;
 
@@ -168,5 +172,19 @@ impl FlightLogData {
             sensor_input: SensorInput::default(),
             control_policy: ControlPolicy::default(),
         }
+    }
+
+    #[cfg(feature = "std")]
+    pub fn export_to_csv(flight_logs: &[FlightLogData]) -> Result<String, Box<dyn Error>> {
+        let mut wtr = Writer::from_writer(vec![]);
+
+        for flight_log in flight_logs {
+            // Serialize each FlightLogData instance to CSV
+
+            wtr.serialize(flight_log)?;
+        }
+
+        wtr.flush()?;
+        Ok(String::from_utf8(wtr.into_inner()?)?)
     }
 }

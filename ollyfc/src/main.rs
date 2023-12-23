@@ -3,6 +3,8 @@
 #![feature(type_alias_impl_trait)]
 #![feature(generic_arg_infer)]
 #![feature(result_option_inspect)]
+#![feature(stmt_expr_attributes)]
+#![feature(generic_const_exprs)]
 
 /// Hardware
 ///
@@ -89,9 +91,11 @@ mod gyro;
 mod sbus;
 mod usb;
 mod w25q;
+mod xfer_protoc;
 
 // Crate
 use w25q::W25Q;
+use xfer_protoc::Xfer;
 
 type FlashPage = [u8; 256];
 const USB_CH_SZ: usize = 4;
@@ -107,6 +111,7 @@ mod app {
         // Logging
         logger: flight_logger::FlightLogger<W25Q>,
         // Sensor
+        #[cfg(not(feature = "no-sensors"))]
         gyro: SensorInput,
         // Serial
         sbus_rx_transfer: SbusInTransfer,
@@ -119,11 +124,13 @@ mod app {
         // Logging
         log_grp_idx: u8,
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
+        // Sensors
+        #[cfg(not(feature = "no-sensors"))]
         mpu6050: Mpu6050<i2c::I2c<I2C1>>,
+        #[cfg(not(feature = "no-sensors"))]
         mpu6050_int: Pin<'B', 8>,
         // USB
-        usb_dev: UsbDevice<'static, UsbBus<USB>>,
-        usb_ser: SerialPort<'static, UsbBus<USB>>,
+        xfer: Xfer,
         // Sbus In
         sbus_rx_buffer: Option<&'static mut [u8; SBUS_BUF_SZ]>,
     }
@@ -166,74 +173,8 @@ mod app {
             &clocks,
         );
 
-        // Gyroscope
-        let mut mpu_int = gpiob.pb8.into_pull_down_input();
-        let mpu = gyro::mpu_6050_init(
-            &mut mpu_int,
-            gpiob
-                .pb6
-                .into_alternate()
-                .internal_pull_up(true)
-                .set_open_drain(),
-            gpiob
-                .pb7
-                .into_alternate()
-                .internal_pull_up(true)
-                .set_open_drain(),
-            dp.I2C1,
-            &mut dp.EXTI,
-            &mut syscfg,
-            &clocks,
-            &mut dp.TIM2.delay_us(&clocks),
-        );
-
-        // Channel for log data
-        let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
-
         // Flight logger setup
-        let logger = flight_logger::FlightLogger::new(mem, 1, 2);
-
-        // Sbus In: receiving flight commands
-        debug!("sbus in: serial...");
-        let mut sbus_in: Rx<USART1, u8> = dp
-            .USART1
-            .rx(
-                gpioa.pa10.into_alternate(),
-                Config::default()
-                    .baudrate(100_000.bps())
-                    .dma(serial::config::DmaConfig::Rx),
-                &clocks,
-            )
-            .unwrap();
-        sbus_in.listen_idle();
-
-        // Sbus In:  DMA stream
-        info!("sbus in: dma...");
-        let dma2 = StreamsTuple::new(dp.DMA2);
-
-        let sbus_in_buffer_A =
-            cortex_m::singleton!(: [u8; SBUS_BUF_SZ] = [0; SBUS_BUF_SZ]).unwrap();
-        let sbus_in_buffer_B =
-            cortex_m::singleton!(: [u8; SBUS_BUF_SZ] = [0; SBUS_BUF_SZ]).unwrap();
-
-        let mut sbus_in_transfer: SbusInTransfer = Transfer::init_peripheral_to_memory(
-            dma2.2,
-            sbus_in,
-            sbus_in_buffer_A,
-            None,
-            dma::config::DmaConfig::default()
-                .memory_increment(true)
-                .fifo_enable(true)
-                .fifo_error_interrupt(true)
-                .transfer_complete_interrupt(true),
-        );
-        sbus_in_transfer.start(|_rx| {});
-
-        // Set up PWM
-        info!("PWM...");
-        let pwm = dp.TIM3.pwm_hz(Channel3::new(gpiob.pb0), 52.Hz(), &clocks);
-        let mut elevator_channel = pwm.split();
-        elevator_channel.enable();
+        let logger = flight_logger::FlightLogger::new(mem, 1, 8);
 
         // USB -
         info!("USB Button Setup...");
@@ -243,7 +184,7 @@ mod app {
 
         // Check if blue button is pressed and set flight mode
         let mode: ProgramMode;
-        if usb_btn.is_high() {
+        if usb_btn.is_low() {
             mode = ProgramMode::FlightMode;
         } else {
             mode = ProgramMode::DataMode;
@@ -266,12 +207,79 @@ mod app {
         let (mut usb_dev, mut usb_ser) =
             crate::usb::usb_setup(usb, unsafe { &mut USB_BUS }, unsafe { &mut EP_MEMORY });
 
-        // USB Mode only! Enter polling loop until host device is connected.
+        let mut xfer = Xfer::new(usb_dev, usb_ser);
+
+        // Gyroscope
+        #[cfg(not(feature = "no-sensors"))]
+        let mut mpu_int = gpiob.pb8.into_pull_down_input();
+
+        #[cfg(not(feature = "no-sensors"))]
+        let mpu = gyro::mpu_6050_init(
+            &mut mpu_int,
+            gpiob
+                .pb6
+                .into_alternate()
+                .internal_pull_up(true)
+                .set_open_drain(),
+            gpiob
+                .pb7
+                .into_alternate()
+                .internal_pull_up(true)
+                .set_open_drain(),
+            dp.I2C1,
+            &mut dp.EXTI,
+            &mut syscfg,
+            &clocks,
+            &mut dp.TIM2.delay_us(&clocks),
+        );
+
+        // Channel for log data
+        let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
+
+        // Sbus In: receiving flight commands
+        let mut sbus_in: Rx<USART1, u8> = dp
+            .USART1
+            .rx(
+                gpioa.pa10.into_alternate(),
+                Config::default()
+                    .baudrate(100_000.bps())
+                    .dma(serial::config::DmaConfig::Rx),
+                &clocks,
+            )
+            .unwrap();
+        sbus_in.listen_idle();
+
+        // Sbus In:  DMA stream
+        let dma2 = StreamsTuple::new(dp.DMA2);
+        let sbus_in_buffer_A =
+            cortex_m::singleton!(: [u8; SBUS_BUF_SZ] = [0; SBUS_BUF_SZ]).unwrap();
+        let sbus_in_buffer_B =
+            cortex_m::singleton!(: [u8; SBUS_BUF_SZ] = [0; SBUS_BUF_SZ]).unwrap();
+        let mut sbus_in_transfer: SbusInTransfer = Transfer::init_peripheral_to_memory(
+            dma2.2,
+            sbus_in,
+            sbus_in_buffer_A,
+            None,
+            dma::config::DmaConfig::default()
+                .memory_increment(true)
+                .fifo_enable(true)
+                .fifo_error_interrupt(true)
+                .transfer_complete_interrupt(true),
+        );
+        sbus_in_transfer.start(|_rx| {});
+
+        // Set up PWM
+        info!("PWM...");
+        let pwm = dp.TIM3.pwm_hz(Channel3::new(gpiob.pb0), 52.Hz(), &clocks);
+        let mut elevator_channel = pwm.split();
+        elevator_channel.enable();
+
+        // USB Mode: Enter polling loop until host device is connected.
         if mode == ProgramMode::DataMode {
             info!("Data mode initiated. Waiting for USB connection...");
             loop {
-                usb_dev.poll(&mut [&mut usb_ser]);
-                match usb_dev.state() {
+                xfer.dev.poll(&mut [&mut xfer.ser]);
+                match xfer.dev.state() {
                     UsbDeviceState::Configured => {
                         break;
                     }
@@ -291,6 +299,7 @@ mod app {
         (
             Shared {
                 logger: logger,
+                #[cfg(not(feature = "no-sensors"))]
                 gyro: SensorInput::default(),
                 sbus_rx_transfer: sbus_in_transfer,
                 flight_controls: sbus::FlightControls::default(),
@@ -299,10 +308,11 @@ mod app {
                 elevator_channel: elevator_channel,
                 log_buffer: [FlightLogData::default(); LOG_BUFF_SZ],
                 log_grp_idx: 0,
+                #[cfg(not(feature = "no-sensors"))]
                 mpu6050: mpu,
+                #[cfg(not(feature = "no-sensors"))]
                 mpu6050_int: mpu_int,
-                usb_dev: usb_dev,
-                usb_ser: usb_ser,
+                xfer: xfer,
                 sbus_rx_buffer: Some(sbus_in_buffer_B),
             },
         )
@@ -320,7 +330,7 @@ mod app {
     }
 
     /// Task for managing the USB connection
-    #[task(priority = 1, shared=[logger], local=[usb_dev, usb_ser])]
+    #[task(priority = 1, shared=[logger], local=[xfer])]
     async fn usb_task(mut cx: usb_task::Context) {
         usb::usb_task_fn(&mut cx).await;
     }
@@ -339,11 +349,6 @@ mod app {
         log_ch_r: Receiver<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
     ) {
         crate::flight_logger::log_write_task_fn(cx, log_ch_r).await;
-    }
-
-    #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]
-    fn sensor_task(mut cx: sensor_task::Context) {
-        crate::gyro::read_sensor_i2c(&mut cx);
     }
 
     #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer, flight_controls], local = [sbus_rx_buffer])]

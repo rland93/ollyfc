@@ -1,113 +1,147 @@
-use log::{info, warn};
+use log::{debug, error, info, warn};
 use ollyfc_common::cmd::Command;
+use ollyfc_common::log::{LogInfoPage, LOG_INFO_SIZE};
+use ollyfc_common::{FlightLogData, LOG_SIZE};
 use rusb::{Device, DeviceDescriptor, GlobalContext};
+use serde::Serialize;
 use serialport::SerialPort;
 use serialport::{available_ports, SerialPortType};
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 // from crate
-use crate::UsbDeviceState;
+use crate::xfer_protoc::FcUsbDevice;
 
-/******************************************************************************/
-
-pub struct FcUsbDevice {
-    pub device: Device<GlobalContext>,
-    pub desc: DeviceDescriptor,
-    pub serial_port: Option<Box<dyn SerialPort>>,
-}
-impl FcUsbDevice {
-    pub fn new(device: Device<GlobalContext>, desc: DeviceDescriptor) -> Self {
-        info!("Creating new FcUsbDevice");
-        let mut dev = FcUsbDevice {
-            device,
-            desc,
-            serial_port: None,
-        };
-
-        // open serialport if we can
-        if let Some(sp) = connect_to_com_port(dev.desc.vendor_id(), dev.desc.product_id()) {
-            dev.serial_port = Some(sp);
-        }
-
-        dev
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct LogDumpProgress {
+    pub current: usize,
+    pub total: usize,
 }
 
 /******************************************************************************/
 
+/// open a dialog to save to file the logs
 #[tauri::command]
-pub fn send_usb_command(
-    usb_state: State<UsbDeviceState>,
-    current_cmd: State<Arc<Mutex<Command>>>,
-    cmd: &str,
-) -> Result<(), String> {
-    let mut usb_device = usb_state.0.lock().unwrap();
-
-    // update the current command so that when we read back we know what we sent
-    {
-        let mut current_cmd = current_cmd.lock().unwrap();
-        *current_cmd = match Command::from_str(cmd) {
-            Some(cmd) => cmd,
-            None => return Err("Invalid command".to_string()),
-        };
-        info!("Current command: {:?}", *current_cmd);
-    }
-
-    info!("Sending USB command: {}", cmd);
-    if let Some(dev) = usb_device.as_mut() {
-        match Command::from_str(cmd) {
-            Some(cmd) => match cmd {
-                Command::Acknowledge => {
-                    info!("Sending acknowledge");
-                    if let Some(port) = &mut dev.serial_port {
-                        let cmd = Command::Acknowledge.to_byte();
-                        port.write(&[cmd]).unwrap();
-                        port.flush().unwrap();
-                        Ok(())
-                    } else {
-                        Err("No serial port".to_string())
-                    }
-                }
-                Command::GetFlashDataInfo => {
-                    info!("Sending get flash data info");
-                    if let Some(port) = &mut dev.serial_port {
-                        let cmd = Command::GetFlashDataInfo.to_byte();
-                        port.write(&[cmd]).unwrap();
-                        port.flush().unwrap();
-                        Ok(())
-                    } else {
-                        Err("No serial port".to_string())
-                    }
-                }
-                Command::GetLogData => {
-                    info!("Sending get log data");
-                    if let Some(port) = &mut dev.serial_port {
-                        let cmd = Command::GetLogData.to_byte();
-                        port.write(&[cmd]).unwrap();
-                        port.flush().unwrap();
-                        Ok(())
-                    } else {
-                        Err("No serial port".to_string())
-                    }
-                }
-                _ => Err("Invalid command".to_string()),
-            },
-            _ => Err("Invalid command data".to_string()),
+pub async fn save_logs_dialog(
+    app: tauri::AppHandle,
+    logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
+) -> Result<String, String> {
+    let file_path = app.dialog().file().blocking_save_file();
+    let file_path = match file_path {
+        Some(file_path) => file_path,
+        None => {
+            info!("No file path selected, user closed dialog.");
+            return Ok(String::from("No file saved"));
         }
-    } else {
-        Err("No USB device connected".to_string())
+    };
+
+    info!("Saving logs to file: {:?}", file_path);
+    let logs = logs.lock().unwrap().clone();
+
+    let csvtext = match FlightLogData::export_to_csv(&logs) {
+        Ok(csvtext) => csvtext,
+        Err(e) => {
+            warn!("Failed to convert logs to CSV: {}", e);
+            String::from("Could not convert files to CSV.")
+        }
+    };
+
+    match std::fs::write(&file_path, csvtext) {
+        Ok(_) => info!("Saved logs to file: {:?}", file_path),
+        Err(e) => warn!("Failed to save logs to file: {}", e),
     }
+    Ok(String::from(format!(
+        "Saved {}",
+        file_path.to_string_lossy()
+    )))
 }
 
+/// "log download" sequence.
 #[tauri::command]
-pub fn search_for_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> {
+pub async fn download_logs(
+    app: tauri::AppHandle,
+    logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
+    usb_dev: State<'_, Arc<Mutex<Option<FcUsbDevice>>>>,
+) -> Result<String, String> {
+    info!("download_logs()");
+    let mut maybe_dev = usb_dev.lock().unwrap();
+    if let Some(ref mut dev) = *maybe_dev {
+        // send command to get log info
+        let cmd = Command::GetFlashDataInfo;
+        match dev.send(&[cmd.to_byte()]) {
+            Ok(ack) => {
+                if !ack {
+                    warn!("Failed to get log info.");
+                    return Err("Failed to get log info.".to_string());
+                } else {
+                    debug!("Sent {}", cmd);
+                }
+            }
+            Err(e) => {
+                warn!("Encountered error at send {e}");
+                return Err("Error sending command.".to_string());
+            }
+        };
+
+        // wait for log info response
+        let loginfo_buf = match dev.recv() {
+            Ok(r) => {
+                debug!("Received log info response {} bytes", r.len());
+                r
+            }
+            Err(e) => {
+                warn!("Encountered error at recv {e}");
+                return Err("Error receiving command.".to_string());
+            }
+        };
+        info!(
+            "Log info response: {:?}",
+            LogInfoPage::from_bytes(&loginfo_buf)
+        );
+    }
+    Ok("".to_string())
+}
+
+fn info_page_from_bytes(read_buf: &[u8]) -> LogInfoPage {
+    let bytes: &[u8; LOG_INFO_SIZE] = &read_buf[0..LOG_INFO_SIZE]
+        .try_into()
+        // should never hit
+        .expect("Buffer size mismatch.");
+    debug!("Data: {:?}", bytes);
+    LogInfoPage::from_bytes(bytes)
+}
+
+/// Get logs from cache for display
+#[tauri::command]
+pub async fn get_logs(
+    app: tauri::AppHandle,
+    logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
+) -> Result<Vec<String>, String> {
+    info!("get-logs from cache");
+    let logs = logs.lock().unwrap().clone();
+    info!("get-logs from cache: {:?}", logs.len());
+    Ok(logdata2json(&logs))
+}
+
+/// search for a FC connected via USB
+#[tauri::command]
+pub fn search_for_usb(
+    usb_state: State<'_, Arc<Mutex<Option<FcUsbDevice>>>>,
+) -> Result<bool, String> {
     info!("Searching for USB device...");
     match find_fc() {
         Some(usb_dev) => {
-            info!("Found device.");
-            let mut usb_device = (*usb_state).0.lock().unwrap();
-            *usb_device = Some(usb_dev);
+            let found_dev = match FcUsbDevice::new(usb_dev) {
+                Ok(d) => d,
+                Err(e) => {
+                    info!("Found a device but failed to open it.");
+                    return Ok(false);
+                }
+            };
+
+            let mut usb_device = (*usb_state).lock().unwrap();
+            *usb_device = Some(found_dev);
             Ok(true)
         }
         None => {
@@ -118,23 +152,28 @@ pub fn search_for_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> 
 }
 
 #[tauri::command]
-pub fn disconnect_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> {
+pub fn disconnect_usb(
+    usb_state: State<'_, Arc<Mutex<Option<FcUsbDevice>>>>,
+) -> Result<bool, String> {
     info!("Disconnecting USB device...");
-    let mut usb_device = (*usb_state).0.lock().unwrap();
-    if let Some(dev) = usb_device.as_mut() {
-        dev.serial_port = None;
-    }
+    let mut usb_device = (*usb_state).lock().unwrap();
     *usb_device = None;
     Ok(false)
 }
 
 /******************************************************************************/
 
-fn find_fc() -> Option<FcUsbDevice> {
+fn find_fc() -> Option<Device<GlobalContext>> {
     match rusb::devices() {
         Ok(device_list) => {
             for device in device_list.iter() {
-                let desc = device.device_descriptor().expect("Couldn't get descriptor");
+                let desc = match device.device_descriptor() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        error!("Error getting device descriptor: {}", e);
+                        continue;
+                    }
+                };
                 info!(
                     "Found vid: pid: {:04x}:{:04x}",
                     desc.vendor_id(),
@@ -142,60 +181,54 @@ fn find_fc() -> Option<FcUsbDevice> {
                 );
                 if desc.vendor_id() == 0x1209 && desc.product_id() == 0x6EF1 {
                     info!("Found FC device");
-                    return Some(FcUsbDevice::new(device, desc));
+                    return Some(device);
+                } else {
+                    continue;
                 }
             }
         }
-        Err(e) => eprintln!("Error obtaining USB devices: {}", e),
+        Err(e) => {
+            error!("Error getting device list: {}", e);
+            return None;
+        }
     }
     None
 }
 
-/// Search COM port for device.
-fn find_device_com_port(vid: u16, pid: u16) -> Option<String> {
-    info!(
-        "Attempting to find COM Port for device {:04x}:{:04x}",
-        vid, pid
-    );
-    match available_ports() {
-        Ok(ports) => {
-            for port in ports {
-                info!("Found port: {}", port.port_name);
-                if let SerialPortType::UsbPort(info) = port.port_type {
-                    info!("Found USB port: {:04x}:{:04x}", info.vid, info.pid);
-                    if info.vid == vid && info.pid == pid {
-                        // found
-                        info!("Found COM port. It's at: {}", port.port_name);
-                        return Some(port.port_name);
-                    }
-                }
+/// convert a vec of log data to JSON string
+fn logdata2json(logdata: &Vec<FlightLogData>) -> Vec<String> {
+    let logs: Vec<String> = logdata
+        .iter()
+        .map(|log| match serde_json::to_string(log) {
+            Ok(s) => s,
+            Err(e) => {
+                error!(
+                    "Serialization of FlightLogData type to json failed: {:?}",
+                    log
+                );
+                error!("Error serializing LogData: {}", e);
+                String::new()
             }
-            None
-        }
-        Err(_) => None,
-    }
+        })
+        .collect();
+    logs
 }
 
-/// Connect to com port
-fn connect_to_com_port(vid: u16, pid: u16) -> Option<Box<dyn serialport::SerialPort>> {
-    info!(
-        "Attempting to connect to COM port for device {:04x}:{:04x}",
-        vid, pid
-    );
-    if let Some(port_name) = find_device_com_port(vid, pid) {
-        info!("Opening COM port...");
-        match serialport::new(&port_name, 9600).open() {
-            Ok(port) => {
-                info!("Opened COM port!");
-                Some(port)
-            }
-            Err(e) => {
-                warn!("Failed to open serial port: {}", e);
-                None
+/// Emit progress of log download.
+fn emit_log_download_progress(app: &tauri::AppHandle, count: usize, total: usize, every: usize) {
+    if count % every == 0 {
+        info!("{}/{}", count, total);
+        match app.emit(
+            "progress-data",
+            LogDumpProgress {
+                current: count,
+                total: total,
+            },
+        ) {
+            Ok(_) => {}
+            Err(_) => {
+                warn!("couldn't emit dump progress.");
             }
         }
-    } else {
-        warn!("Device not found");
-        None
     }
 }

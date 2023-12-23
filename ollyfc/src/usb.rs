@@ -1,17 +1,23 @@
-use defmt::{debug, error, info, warn};
+use crc32fast::hash;
+use defmt::{info, warn};
 use ollyfc_common::{cmd::Command, LOG_SIZE};
 use rtic::Mutex;
 use rtic_monotonics::{
     systick::{ExtU32, Systick},
     Monotonic,
 };
-use stm32f4xx_hal::otg_fs::{UsbBus, UsbBusType, USB};
+use stm32f4xx_hal::{
+    nb,
+    otg_fs::{UsbBus, UsbBusType, USB},
+};
 use usb_device::{
     class_prelude::UsbBusAllocator,
     device::{StringDescriptors, UsbDevice, UsbDeviceBuilder, UsbVidPid},
+    UsbError,
 };
 
-use crate::w25q::MemError;
+use crate::xfer_protoc::Xfer;
+use crate::{w25q::MemError, xfer_protoc::HEADER_LEN};
 
 #[allow(non_snake_case)]
 pub fn usb_setup(
@@ -37,102 +43,51 @@ pub fn usb_setup(
 }
 
 pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
-    let mut buf: [u8; 128] = [0u8; 128];
-    let dev = &mut *cx.local.usb_dev;
-    let ser = &mut *cx.local.usb_ser;
+    let mut cmd_buf = [0u8; 256];
 
+    // primary loop for receiving and handling USB commands
     loop {
-        let mut count: usize = 0;
-
-        if dev.poll(&mut [ser]) {
-            // events
-            if let Ok(ct) = ser.read(&mut buf) {
-                count = ct;
-            } else {
-                count = 0;
+        // receive a command
+        let len = match cx.local.xfer.receive(&mut cmd_buf).await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("An error occurred in recv.");
+                Systick::delay(1u32.millis()).await;
+                continue;
             }
+        };
+        // slice out data
+        let data = &cmd_buf[HEADER_LEN..HEADER_LEN + len];
+
+        // handle invalid command
+        if data.len() != 1 {
+            warn!("Invalid command received");
+            continue;
         }
 
-        // send to command handler
-        if count > 0 {
-            match Command::from_byte(buf[0]) {
-                Command::Invalid => {
-                    error!("Invalid command received {}", Command::Invalid.to_str());
-                }
-                Command::Acknowledge => {
-                    info!("Received acknowledge");
-                    ser.write(&[Command::Acknowledge.to_byte()]).unwrap();
-                }
-                Command::GetFlashDataInfo => {
-                    info!("Received get flash data info");
-                    let info = cx.shared.logger.lock(|logger| logger.read_info_page());
-
-                    while !ser.rts() {
-                        Systick::delay(1u32.millis()).await;
-                    }
-                    let nbytes = match ser.write(&info.to_bytes()) {
-                        Ok(n) => n,
-                        Err(e) => {
-                            error!("Write buffer is full");
-                            panic!("Write buffer is full");
-                        }
-                    };
-                    match ser.flush() {
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!("Write buffer is full");
-                        }
-                    };
-                }
-                Command::GetLogData => {
-                    info!("Received get log data");
-                    let mut ct: u32 = 0;
-                    let mut data: [u8; LOG_SIZE] = [0u8; LOG_SIZE];
-
-                    let info = cx.shared.logger.lock(|logger| logger.read_info_page());
-                    let total = info.n_logs_in_region();
-
-                    while ct < total {
-                        debug!("{}: {}/{}", Systick::now().ticks(), ct, total);
-                        match cx.shared.logger.lock(|logger| {
-                            let addr = logger.block_start_ptr() + ct * LOG_SIZE as u32;
-                            logger.mem.read(addr, &mut data)?;
-                            Ok(())
-                        }) {
-                            Ok(_) => (),
-                            Err(e) => match e {
-                                MemError::SpiError(_) => error!("SPI error"),
-                                MemError::NotAlignedError => error!("Page not aligned"),
-                                MemError::OutOfBoundsError => error!("Data out of bounds"),
-                            },
-                        }
-
-                        // delay until rts
-                        while !ser.rts() {
-                            Systick::delay(1u32.millis()).await;
-                        }
-
-                        let nbytes = match ser.write(&data) {
-                            Ok(n) => n,
-                            Err(e) => {
-                                error!("Write buffer is full");
-                                panic!("Write buffer is full");
-                            }
-                        };
-                        match ser.flush() {
-                            Ok(_) => {}
-                            Err(e) => {
-                                // warn!("Write buffer is full");
-                            }
-                        };
-                        ct += 1;
-                    }
-                }
-
-                _ => {
-                    error!("Command 0x{:x} not implemented", buf[0]);
-                }
+        // pass to command handlers
+        match Command::from_byte(data[0]) {
+            Command::Invalid => {
+                info!("Invalid command received");
             }
-        }
+            Command::Acknowledge => {
+                info!("Received acknowledge");
+            }
+            Command::GetFlashDataInfo => {
+                info!("Received get flash data info");
+                get_flash_info_handler(cx).await;
+            }
+            Command::GetLogData => {
+                info!("Received get log data");
+            }
+            _ => {
+                info!("Command 0x{:x} not implemented", data[0]);
+            }
+        };
     }
+}
+
+pub async fn get_flash_info_handler(cx: &mut crate::app::usb_task::Context<'_>) {
+    let info = cx.shared.logger.lock(|logger| logger.read_info_page());
+    cx.local.xfer.send(&info.to_bytes()).await;
 }

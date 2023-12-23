@@ -1,10 +1,11 @@
+#[cfg(not(feature = "no-sensors"))]
 use crate::app::sensor_task;
+
 use mpu6050_dmp::{
     accel::Accel, address::Address, config::DigitalLowPassFilter, quaternion::Quaternion,
     sensor::Mpu6050, yaw_pitch_roll::YawPitchRoll,
 };
 use ollyfc_common::SensorInput;
-use rtic::Mutex;
 use stm32f4xx_hal::{
     gpio::{Alternate, Edge, Input, OpenDrain, Pin},
     i2c::I2c,
@@ -15,6 +16,7 @@ use stm32f4xx_hal::{
     timer::Delay,
 };
 
+#[cfg(not(feature = "no-sensors"))]
 pub fn read_sensor_i2c(cx: &mut sensor_task::Context) {
     // Grab newest from buffer
     let mut buf = [0; 28];

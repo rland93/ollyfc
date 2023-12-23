@@ -13,12 +13,11 @@
   onMount(async () => {
     const unlistenSerial = await listen(
       "progress-data",
-      (event: Event<EmitEvent>) => {
+      (event: Event<LogDumpProgress>) => {
         // store data into recvd in a reactive way.
-        const emitted: EmitEvent = event.payload;
-        let progress: LogDumpProgress = JSON.parse(emitted.data);
-        currentValue = progress.current;
-        upperBound = progress.total;
+        // let progress: LogDumpProgress = JSON.parse(event);
+        currentValue = event.payload.current;
+        upperBound = event.payload.total;
       },
     );
   });

@@ -14,7 +14,7 @@
   </div>
   <div class="bytes">
     <span style="display:inline-block;width:4em;text-align:right;"
-      >{currentValue - lowerBound + 1}
+      >{currentValue - lowerBound}
     </span>
     / {upperBound - lowerBound}
   </div>
@@ -42,6 +42,6 @@
   .progress {
     height: 100%;
     background-color: var(--accent1);
-    transition: width 0.3s ease;
+    transition: width;
   }
 </style>
