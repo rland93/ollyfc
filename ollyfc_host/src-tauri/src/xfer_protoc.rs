@@ -32,7 +32,7 @@ impl FcUsbDevice {
         let crc = hash(data) as u32;
         let len = data.len() as u16;
         packet[0..4].copy_from_slice(&crc.to_le_bytes());
-        packet[4..HEADER_LEN].copy_from_slice(&len.to_le_bytes());
+        packet[4..6].copy_from_slice(&len.to_le_bytes());
 
         debug!("created packet. crc: crc={:x}, len={}", crc, len);
 
@@ -97,13 +97,15 @@ impl FcUsbDevice {
 
     pub fn recv(&mut self) -> Result<Vec<u8>, Error> {
         debug!("wait to receive packet...");
-        let bytes_to_recv: u32;
         loop {
             if let Ok(ct) = self.ser.bytes_to_read() {
                 if ct == 0 {
                     continue;
+                } else if (ct as usize) < HEADER_LEN {
+                    info!("Not enough bytes to read header. {} / {}", ct, HEADER_LEN);
+                    return Err(Error::Io);
                 } else {
-                    bytes_to_recv = ct;
+                    debug!("{} bytes to read", ct);
                     break;
                 }
             } else {
@@ -112,32 +114,70 @@ impl FcUsbDevice {
             }
         }
 
-        let mut packet: Vec<u8> = vec![0u8; bytes_to_recv as usize];
-
-        // receive packet
-        let recvd = match self.ser.read(&mut packet) {
-            Ok(n) => n,
+        // read header
+        let mut header: [u8; HEADER_LEN] = [0u8; HEADER_LEN];
+        match self.ser.read_exact(&mut header) {
+            Ok(_) => {}
             Err(e) => {
                 error!("Error at serial read: {e}");
                 return Err(Error::Io);
             }
-        };
-        debug!("read {} bytes", recvd);
+        }
 
         // unpack header
-        let crc = u32::from_le_bytes(packet[0..4].try_into().unwrap());
-        let len = u16::from_le_bytes(packet[4..HEADER_LEN].try_into().unwrap());
+        let crc = u32::from_le_bytes(header[0..4].try_into().unwrap());
+        let len = u16::from_le_bytes(header[4..6].try_into().unwrap());
+
+        // get no of bytes to read from header
+        let mut data_remaining: usize = len as usize;
+
+        debug!("crc: crc={:x}, len={}", crc, len);
+        let mut data: Vec<u8> = vec![0u8; data_remaining as usize];
+
+        // receive data
+        loop {
+            // get bytes to read
+            if let Ok(ct) = self.ser.bytes_to_read() {
+                if ct == 0 {
+                    continue;
+                } else {
+                    debug!("{} bytes to read", ct);
+                }
+            } else {
+                error!("Error in recv waiting for packet.");
+                return Err(Error::Io);
+            }
+
+            // read into buffer
+            let n = match self.ser.read(&mut data[len as usize - data_remaining..]) {
+                Ok(n) => n,
+                Err(e) => {
+                    error!("Error in recv waiting for packet. {e}");
+                    return Err(Error::Io);
+                }
+            };
+            if n == 0 {
+                continue;
+            }
+
+            debug!("read {} bytes.", n);
+            data_remaining -= n;
+            if data_remaining == 0 {
+                break;
+            }
+        }
+        debug!("read finished.");
 
         // validate CRC
-        let valid = crc == hash(&packet[HEADER_LEN..HEADER_LEN + len as usize]);
+        let valid = crc == hash(&data);
         debug!("crc: crc={:x}, len={} -- valid={}", crc, len, valid);
+
         // send ack
         debug!("sending ack...");
         self.send_ack(valid)?;
 
-        let recvd_data = packet[HEADER_LEN..HEADER_LEN + len as usize].to_vec();
         debug!("received {} bytes", len);
-        return Ok(recvd_data);
+        return Ok(data);
     }
 
     fn send_ack(&mut self, valid: bool) -> Result<(), Error> {

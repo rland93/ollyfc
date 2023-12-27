@@ -29,7 +29,7 @@ pub const RTS_DELAY: u32 = 1;
 pub const ACK: u8 = 0xAA;
 pub const NACK: u8 = 0xAB;
 pub const HEADER_LEN: usize = 6;
-pub const PACKET_SIZE: usize = 128;
+pub const PACKET_SIZE: usize = 262;
 
 impl Xfer {
     pub fn new(
@@ -46,7 +46,11 @@ impl Xfer {
     pub async fn send(&mut self, data: &[u8]) -> Result<bool, UsbError> {
         // raise runtime error of data is too large
         if data.len() > self.tx_buf.len() - HEADER_LEN {
-            error!("Data too large to send");
+            error!(
+                "Data too large to send {} > {}",
+                data.len(),
+                self.tx_buf.len() - HEADER_LEN
+            );
             return Err(UsbError::BufferOverflow);
         }
 

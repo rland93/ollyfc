@@ -325,7 +325,7 @@ mod app {
             // until an interrupt occurs. Since RTIC uses hardware interrupt
             // for scheduling, this basically sleeps until the next task is
             // ready to run.
-            rtic::export::wfi();
+            // rtic::export::wfi();
         }
     }
 

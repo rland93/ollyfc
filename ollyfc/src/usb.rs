@@ -16,8 +16,8 @@ use usb_device::{
     UsbError,
 };
 
-use crate::xfer_protoc::Xfer;
 use crate::{w25q::MemError, xfer_protoc::HEADER_LEN};
+use crate::{w25q::PAGE_SIZE, xfer_protoc::Xfer};
 
 #[allow(non_snake_case)]
 pub fn usb_setup(
@@ -79,6 +79,7 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
             }
             Command::GetLogData => {
                 info!("Received get log data");
+                get_log_data_handler(cx).await;
             }
             _ => {
                 info!("Command 0x{:x} not implemented", data[0]);
@@ -88,6 +89,57 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
 }
 
 pub async fn get_flash_info_handler(cx: &mut crate::app::usb_task::Context<'_>) {
-    let info = cx.shared.logger.lock(|logger| logger.read_info_page());
+    // get flash info page
+    let mut info = cx.shared.logger.lock(|logger| logger.read_info_page());
+    /* TODO: hardcoded for testing */
+    info.page_size = PAGE_SIZE;
     cx.local.xfer.send(&info.to_bytes()).await;
+}
+
+pub async fn get_log_data_handler(cx: &mut crate::app::usb_task::Context<'_>) {
+    // enter a loop to acquire log data. That way we can avoid the overhead
+    // of needing to call commands for each log entry read.
+    let mut rx_buf = [0u8; 10];
+    let mut page_buf = [0u8; PAGE_SIZE as usize];
+    loop {
+        // receive address
+        cx.local.xfer.receive(&mut rx_buf).await;
+        let addr = u32::from_le_bytes(rx_buf[0..4].try_into().unwrap());
+
+        info!("Received address: 0x{:x}", addr);
+
+        // TODO: properly account for this termination of the loop
+        #[allow(non_snake_case)]
+        let TERMINATION_ADDR = 0xFFFFFFFFu32;
+        if addr == TERMINATION_ADDR {
+            info!("Done with direct address mode.");
+            break;
+        }
+
+        // get flash page at that address
+        match cx
+            .shared
+            .logger
+            .lock(|logger| logger.mem.read(addr, &mut page_buf))
+        {
+            Ok(_) => {}
+            Err(e) => {
+                match e {
+                    MemError::OutOfBoundsError => {
+                        warn!("Invalid address received");
+                    }
+                    MemError::NotAlignedError => {
+                        warn!("Not aligned");
+                    }
+                    MemError::SpiError(e) => {
+                        panic!("SPI error");
+                    }
+                }
+                break;
+            }
+        }
+
+        // send page
+        cx.local.xfer.send(&page_buf).await;
+    }
 }

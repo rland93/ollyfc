@@ -68,14 +68,13 @@ pub async fn download_logs(
     let mut maybe_dev = usb_dev.lock().unwrap();
     if let Some(ref mut dev) = *maybe_dev {
         // send command to get log info
-        let cmd = Command::GetFlashDataInfo;
-        match dev.send(&[cmd.to_byte()]) {
+        match dev.send(&[Command::GetFlashDataInfo.to_byte()]) {
             Ok(ack) => {
                 if !ack {
                     warn!("Failed to get log info.");
                     return Err("Failed to get log info.".to_string());
                 } else {
-                    debug!("Sent {}", cmd);
+                    debug!("Sent {}", Command::GetFlashDataInfo);
                 }
             }
             Err(e) => {
@@ -95,10 +94,107 @@ pub async fn download_logs(
                 return Err("Error receiving command.".to_string());
             }
         };
-        info!(
-            "Log info response: {:?}",
-            LogInfoPage::from_bytes(&loginfo_buf)
-        );
+        let linfo = LogInfoPage::from_bytes(&loginfo_buf);
+        info!("Log info response: {:?}", linfo);
+
+        // no. of logs to download
+        let num_logs = linfo.n_logs_in_region() as usize;
+        let logs_per_page = linfo.page_size as usize / LOG_SIZE;
+
+        // emit progress
+        emit_log_download_progress(&app, 0, num_logs, 10);
+        let npages = (linfo.block_end_ptr - linfo.block_start_ptr) / linfo.page_size;
+        info!("reading npages={}...", npages);
+
+        // send command to get log data
+        match dev.send(&[Command::GetLogData.to_byte()]) {
+            Ok(ack) => {
+                if !ack {
+                    warn!("Failed to get log data.");
+                    return Err("Failed to get log data.".to_string());
+                } else {
+                    debug!("Sent {}", Command::GetFlashDataInfo);
+                }
+            }
+            Err(e) => {
+                warn!("Encountered error at send {e}");
+                return Err("Error sending command.".to_string());
+            }
+        };
+
+        // read out each page
+        for i in 0..npages {
+            let addr: u32 = linfo.block_start_ptr + (i * linfo.page_size);
+            info!("page@{:4x?} ({i}/{npages}", addr);
+
+            // send the address
+            match dev.send(&addr.to_le_bytes()) {
+                Ok(ack) => {
+                    if !ack {
+                        warn!("Failed to get log data.");
+                        return Err("Failed to get log data.".to_string());
+                    } else {
+                        debug!("Sent {}", addr);
+                    }
+                }
+                Err(e) => {
+                    warn!("Encountered error at send {e}");
+                    return Err("Error sending command.".to_string());
+                }
+            };
+
+            // wait for log data response
+            let page = match dev.recv() {
+                Ok(r) => {
+                    debug!("Received log data response {} bytes", r.len());
+                    r
+                }
+                Err(e) => {
+                    warn!("Encountered error at recv {e}");
+                    return Err("Error receiving command.".to_string());
+                }
+            };
+
+            // get logs out of page
+            for j in 0..(linfo.page_size as usize / LOG_SIZE) {
+                info!(
+                    "log@{:4x?} ({j}/{}",
+                    addr as usize + (j * LOG_SIZE),
+                    linfo.page_size
+                );
+
+                let log_bytes: &[u8; LOG_SIZE] = &page[(j * LOG_SIZE)..((j + 1) * LOG_SIZE)]
+                    .try_into()
+                    .expect("Buffer size mismatch.");
+
+                // push to store
+                logs.lock()
+                    .unwrap()
+                    .push(FlightLogData::from_bytes(&log_bytes));
+
+                // emit progress
+
+                let current = i as usize * logs_per_page + j;
+                emit_log_download_progress(&app, current, num_logs, logs_per_page);
+            }
+        }
+        // send commmand to end log read
+        let end = 0xFFFFFFFFu32;
+        match dev.send(&end.to_le_bytes()) {
+            Ok(ack) => {
+                if !ack {
+                    warn!("Termination command not acknowledged.");
+                    return Err("Failed to send direct read termination command!".to_string());
+                } else {
+                    debug!("Sent termination command {:08x?}", end);
+                }
+            }
+            Err(e) => {
+                warn!("Encountered error at sending termination command {e}");
+                return Err("Error sending command.".to_string());
+            }
+        };
+        emit_log_download_progress(&app, num_logs, num_logs, 1)
     }
     Ok("".to_string())
 }
@@ -118,7 +214,6 @@ pub async fn get_logs(
     app: tauri::AppHandle,
     logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
 ) -> Result<Vec<String>, String> {
-    info!("get-logs from cache");
     let logs = logs.lock().unwrap().clone();
     info!("get-logs from cache: {:?}", logs.len());
     Ok(logdata2json(&logs))
