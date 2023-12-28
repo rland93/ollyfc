@@ -1,13 +1,11 @@
 use log::{debug, error, info, warn};
 use ollyfc_common::cmd::Command;
-use ollyfc_common::log::{LogInfoPage, LOG_INFO_SIZE};
+use ollyfc_common::log::LogInfoPage;
 use ollyfc_common::{FlightLogData, LOG_SIZE};
-use rusb::{Device, DeviceDescriptor, GlobalContext};
+use rusb::{Device, GlobalContext};
 use serde::Serialize;
-use serialport::SerialPort;
-use serialport::{available_ports, SerialPortType};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 // from crate
@@ -25,36 +23,40 @@ pub struct LogDumpProgress {
 #[tauri::command]
 pub async fn save_logs_dialog(
     app: tauri::AppHandle,
-    logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
+    flight_logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
 ) -> Result<String, String> {
-    let file_path = app.dialog().file().blocking_save_file();
-    let file_path = match file_path {
-        Some(file_path) => file_path,
+    info!("save_logs_dialog()");
+
+    let file_path = match app.dialog().file().blocking_save_file() {
+        Some(p) => {
+            info!("File path selected: {:?}", p);
+            p
+        }
         None => {
             info!("No file path selected, user closed dialog.");
-            return Ok(String::from("No file saved"));
+            return Err(String::from("No file selected"));
         }
     };
-
     info!("Saving logs to file: {:?}", file_path);
-    let logs = logs.lock().unwrap().clone();
+    let mut logs: Vec<FlightLogData> = flight_logs.lock().unwrap().clone();
 
-    let csvtext = match FlightLogData::export_to_csv(&logs) {
+    logs.sort_by_key(|log| log.timestamp);
+
+    let csvtext = match crate::utils::export_to_csv(&logs) {
         Ok(csvtext) => csvtext,
         Err(e) => {
             warn!("Failed to convert logs to CSV: {}", e);
-            String::from("Could not convert files to CSV.")
+            return Err(String::from("Could not convert files to CSV."));
         }
     };
-
     match std::fs::write(&file_path, csvtext) {
         Ok(_) => info!("Saved logs to file: {:?}", file_path),
-        Err(e) => warn!("Failed to save logs to file: {}", e),
+        Err(e) => {
+            warn!("Failed to save logs to file: {}", e);
+            return Err(String::from("Could not save files to CSV."));
+        }
     }
-    Ok(String::from(format!(
-        "Saved {}",
-        file_path.to_string_lossy()
-    )))
+    Ok(String::from(format!("{}", file_path.to_string_lossy())))
 }
 
 /// "log download" sequence.
@@ -65,6 +67,7 @@ pub async fn download_logs(
     usb_dev: State<'_, Arc<Mutex<Option<FcUsbDevice>>>>,
 ) -> Result<String, String> {
     info!("download_logs()");
+    logs.lock().unwrap().clear();
     let mut maybe_dev = usb_dev.lock().unwrap();
     if let Some(ref mut dev) = *maybe_dev {
         // send command to get log info
@@ -125,7 +128,7 @@ pub async fn download_logs(
         // read out each page
         for i in 0..npages {
             let addr: u32 = linfo.block_start_ptr + (i * linfo.page_size);
-            info!("page@{:4x?} ({i}/{npages}", addr);
+            info!("page@{:4x?} ({i}/{npages})", addr);
 
             // send the address
             match dev.send(&addr.to_le_bytes()) {
@@ -167,13 +170,14 @@ pub async fn download_logs(
                     .try_into()
                     .expect("Buffer size mismatch.");
 
-                // push to store
-                logs.lock()
-                    .unwrap()
-                    .push(FlightLogData::from_bytes(&log_bytes));
-
+                // if we read an empty page, the log will appear as all 0xFF
+                if !log_bytes.iter().all(|&b| b == 0xFF) {
+                    // push to store
+                    logs.lock()
+                        .unwrap()
+                        .push(FlightLogData::from_bytes(&log_bytes));
+                }
                 // emit progress
-
                 let current = i as usize * logs_per_page + j;
                 emit_log_download_progress(&app, current, num_logs, logs_per_page);
             }
@@ -199,24 +203,20 @@ pub async fn download_logs(
     Ok("".to_string())
 }
 
-fn info_page_from_bytes(read_buf: &[u8]) -> LogInfoPage {
-    let bytes: &[u8; LOG_INFO_SIZE] = &read_buf[0..LOG_INFO_SIZE]
-        .try_into()
-        // should never hit
-        .expect("Buffer size mismatch.");
-    debug!("Data: {:?}", bytes);
-    LogInfoPage::from_bytes(bytes)
-}
-
 /// Get logs from cache for display
 #[tauri::command]
 pub async fn get_logs(
-    app: tauri::AppHandle,
     logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
 ) -> Result<Vec<String>, String> {
-    let logs = logs.lock().unwrap().clone();
+    let logs: Vec<String> = logs
+        .lock()
+        .unwrap()
+        .clone()
+        .iter()
+        .map(|l| serde_json::to_string(l).unwrap())
+        .collect();
     info!("get-logs from cache: {:?}", logs.len());
-    Ok(logdata2json(&logs))
+    Ok(logs)
 }
 
 /// search for a FC connected via USB
@@ -230,7 +230,7 @@ pub fn search_for_usb(
             let found_dev = match FcUsbDevice::new(usb_dev) {
                 Ok(d) => d,
                 Err(e) => {
-                    info!("Found a device but failed to open it.");
+                    info!("Found a device but failed to open it. {e}");
                     return Ok(false);
                 }
             };
@@ -288,25 +288,6 @@ fn find_fc() -> Option<Device<GlobalContext>> {
         }
     }
     None
-}
-
-/// convert a vec of log data to JSON string
-fn logdata2json(logdata: &Vec<FlightLogData>) -> Vec<String> {
-    let logs: Vec<String> = logdata
-        .iter()
-        .map(|log| match serde_json::to_string(log) {
-            Ok(s) => s,
-            Err(e) => {
-                error!(
-                    "Serialization of FlightLogData type to json failed: {:?}",
-                    log
-                );
-                error!("Error serializing LogData: {}", e);
-                String::new()
-            }
-        })
-        .collect();
-    logs
 }
 
 /// Emit progress of log download.

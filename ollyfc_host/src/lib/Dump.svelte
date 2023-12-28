@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/primitives";
-  import { emit, listen, type Event } from "@tauri-apps/api/event";
+  import { listen, type Event } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import Progress from "./Progress.svelte";
-  import type { EmitEvent } from "./appTypes";
   import type { LogDumpProgress } from "./usb_state";
 
   let lowerBound: number = 0;

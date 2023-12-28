@@ -100,10 +100,10 @@ pub async fn flight_loop(
                 accel_z: gyro.accel_z,
             },
             control_policy: ControlPolicy {
-                elevator: ele,
-                aileron: ail,
-                rudder: rud,
-                throttle: thr,
+                ctl_elevator: ele,
+                ctl_aileron: ail,
+                ctl_rudder: rud,
+                ctl_throttle: thr,
             },
         };
         log_ch_s

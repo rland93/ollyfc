@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 // Modules
 mod usb;
+mod utils;
 mod xfer_protoc;
 
 #[derive(Debug, Clone, Serialize)]
@@ -33,6 +34,7 @@ fn main() {
         .manage(dev.clone())
         .manage(current_cmd.clone())
         .manage(flight_logs.clone())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![

@@ -15,7 +15,7 @@
   </div>
   <div class="ui-element2">
     {#if $usb}
-      <button on:click={downloadLogs}>get logs</button>
+      <button on:click={downloadLogs}>load from flash</button>
       {res}
     {:else}
       <p>Not connected</p>
@@ -25,7 +25,7 @@
 
 <style>
   .dev-cmd {
-    width: 12em;
+    width: 7em;
     flex-shrink: 0;
   }
 </style>

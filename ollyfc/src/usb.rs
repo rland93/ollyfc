@@ -99,10 +99,16 @@ pub async fn get_flash_info_handler(
     cx: &mut crate::app::usb_task::Context<'_>,
 ) -> Result<(), UsbError> {
     // get flash info page
-    let mut info = cx.shared.logger.lock(|logger| logger.read_info_page());
-    /* TODO: hardcoded for testing */
-    info.page_size = PAGE_SIZE;
-    info.block_end_ptr = info.block_start_ptr + PAGE_SIZE * 4;
+    let info = cx.shared.logger.lock(|logger| logger.read_info_page());
+
+    info!("Sending flash info page");
+    info!("block_start_ptr: 0x{:x}", info.block_start_ptr);
+    info!("block_end_ptr: 0x{:x}", info.block_end_ptr);
+    info!("block_size: 0x{:x}", info.block_size);
+    info!("n_blocks: 0x{:x}", info.n_blocks);
+    info!("current_page: 0x{:x}", info.current_page);
+    info!("page_size: 0x{:x}", info.page_size);
+
     cx.local.xfer.send(&info.to_bytes()).await?;
     Ok(())
 }
