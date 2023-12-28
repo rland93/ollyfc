@@ -70,6 +70,8 @@ pub async fn flight_loop(
 
         // Sensor
         let gyro = cx.shared.gyro.lock(|g: &mut SensorInput| g.clone());
+        #[cfg(feature = "no-sensors")]
+        let gyro = SensorInput::default();
 
         // control policies
         let ele = elevator_ctl(controls.elevator, arm_mode);
@@ -98,10 +100,10 @@ pub async fn flight_loop(
                 accel_z: gyro.accel_z,
             },
             control_policy: ControlPolicy {
-                elevator: ele,
-                aileron: ail,
-                rudder: rud,
-                throttle: thr,
+                ctl_elevator: ele,
+                ctl_aileron: ail,
+                ctl_rudder: rud,
+                ctl_throttle: thr,
             },
         };
         log_ch_s

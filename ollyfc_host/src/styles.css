@@ -16,6 +16,10 @@
   --ui-font-size1: 0.9rem;
   --ui-font-size2: 1.1rem;
   --ui-font-size3: 0.8rem;
+
+  --chart1: rgb(8,	14,	173);
+  --chart2: rgb(7,	92,	174);
+  --chart3: rgb(74,	167,	46);
 }
 .ui-heading {
   letter-spacing: 1px;

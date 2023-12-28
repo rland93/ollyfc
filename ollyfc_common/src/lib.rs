@@ -4,7 +4,11 @@ pub mod cmd;
 pub mod log;
 
 #[cfg(feature = "std")]
+use csv::Writer;
+#[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "std")]
+use std::error::Error;
 
 pub const LOG_SIZE: usize = 64;
 
@@ -64,19 +68,19 @@ impl SBusInput {
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControlPolicy {
-    pub elevator: u16,
-    pub aileron: u16,
-    pub rudder: u16,
-    pub throttle: u16,
+    pub ctl_elevator: u16,
+    pub ctl_aileron: u16,
+    pub ctl_rudder: u16,
+    pub ctl_throttle: u16,
 }
 
 impl ControlPolicy {
     pub fn default() -> Self {
         Self {
-            elevator: 0,
-            aileron: 0,
-            rudder: 0,
-            throttle: 0,
+            ctl_elevator: 0,
+            ctl_aileron: 0,
+            ctl_rudder: 0,
+            ctl_throttle: 0,
         }
     }
 }
@@ -86,8 +90,11 @@ impl ControlPolicy {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlightLogData {
     pub timestamp: u32,
+    #[cfg_attr(feature = "std", serde(flatten))]
     pub sbus_input: SBusInput,
+    #[cfg_attr(feature = "std", serde(flatten))]
     pub sensor_input: SensorInput,
+    #[cfg_attr(feature = "std", serde(flatten))]
     pub control_policy: ControlPolicy,
 }
 
@@ -116,10 +123,10 @@ impl FlightLogData {
         bytes[38..42].copy_from_slice(&self.sensor_input.roll.to_be_bytes());
 
         // control policy
-        bytes[42..44].copy_from_slice(&self.control_policy.elevator.to_be_bytes());
-        bytes[44..46].copy_from_slice(&self.control_policy.aileron.to_be_bytes());
-        bytes[46..48].copy_from_slice(&self.control_policy.rudder.to_be_bytes());
-        bytes[48..50].copy_from_slice(&self.control_policy.throttle.to_be_bytes());
+        bytes[42..44].copy_from_slice(&self.control_policy.ctl_elevator.to_be_bytes());
+        bytes[44..46].copy_from_slice(&self.control_policy.ctl_aileron.to_be_bytes());
+        bytes[46..48].copy_from_slice(&self.control_policy.ctl_rudder.to_be_bytes());
+        bytes[48..50].copy_from_slice(&self.control_policy.ctl_throttle.to_be_bytes());
 
         bytes
     }
@@ -147,10 +154,10 @@ impl FlightLogData {
         };
 
         let control_policy = ControlPolicy {
-            elevator: u16::from_be_bytes(bytes[42..44].try_into().unwrap()),
-            aileron: u16::from_be_bytes(bytes[44..46].try_into().unwrap()),
-            rudder: u16::from_be_bytes(bytes[46..48].try_into().unwrap()),
-            throttle: u16::from_be_bytes(bytes[48..50].try_into().unwrap()),
+            ctl_elevator: u16::from_be_bytes(bytes[42..44].try_into().unwrap()),
+            ctl_aileron: u16::from_be_bytes(bytes[44..46].try_into().unwrap()),
+            ctl_rudder: u16::from_be_bytes(bytes[46..48].try_into().unwrap()),
+            ctl_throttle: u16::from_be_bytes(bytes[48..50].try_into().unwrap()),
         };
 
         Self {
@@ -168,5 +175,18 @@ impl FlightLogData {
             sensor_input: SensorInput::default(),
             control_policy: ControlPolicy::default(),
         }
+    }
+
+    #[cfg(feature = "std")]
+    pub fn export_to_csv(flight_logs: &[FlightLogData]) -> Result<String, Box<dyn Error>> {
+        let mut wtr = Writer::from_writer(vec![]);
+
+        for flight_log in flight_logs {
+            // Serialize each FlightLogData instance to CSV
+            wtr.serialize(flight_log)?;
+        }
+
+        wtr.flush()?;
+        Ok(String::from_utf8(wtr.into_inner()?)?)
     }
 }

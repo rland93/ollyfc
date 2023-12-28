@@ -1,113 +1,242 @@
-use log::{info, warn};
+use log::{debug, error, info, warn};
 use ollyfc_common::cmd::Command;
-use rusb::{Device, DeviceDescriptor, GlobalContext};
-use serialport::SerialPort;
-use serialport::{available_ports, SerialPortType};
+use ollyfc_common::log::LogInfoPage;
+use ollyfc_common::{FlightLogData, LOG_SIZE};
+use rusb::{Device, GlobalContext};
+use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 // from crate
-use crate::UsbDeviceState;
+use crate::xfer_protoc::FcUsbDevice;
 
-/******************************************************************************/
-
-pub struct FcUsbDevice {
-    pub device: Device<GlobalContext>,
-    pub desc: DeviceDescriptor,
-    pub serial_port: Option<Box<dyn SerialPort>>,
-}
-impl FcUsbDevice {
-    pub fn new(device: Device<GlobalContext>, desc: DeviceDescriptor) -> Self {
-        info!("Creating new FcUsbDevice");
-        let mut dev = FcUsbDevice {
-            device,
-            desc,
-            serial_port: None,
-        };
-
-        // open serialport if we can
-        if let Some(sp) = connect_to_com_port(dev.desc.vendor_id(), dev.desc.product_id()) {
-            dev.serial_port = Some(sp);
-        }
-
-        dev
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct LogDumpProgress {
+    pub current: usize,
+    pub total: usize,
 }
 
 /******************************************************************************/
 
+/// open a dialog to save to file the logs
 #[tauri::command]
-pub fn send_usb_command(
-    usb_state: State<UsbDeviceState>,
-    current_cmd: State<Arc<Mutex<Command>>>,
-    cmd: &str,
-) -> Result<(), String> {
-    let mut usb_device = usb_state.0.lock().unwrap();
+pub async fn save_logs_dialog(
+    app: tauri::AppHandle,
+    flight_logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
+) -> Result<String, String> {
+    info!("save_logs_dialog()");
 
-    // update the current command so that when we read back we know what we sent
-    {
-        let mut current_cmd = current_cmd.lock().unwrap();
-        *current_cmd = match Command::from_str(cmd) {
-            Some(cmd) => cmd,
-            None => return Err("Invalid command".to_string()),
-        };
-        info!("Current command: {:?}", *current_cmd);
-    }
-
-    info!("Sending USB command: {}", cmd);
-    if let Some(dev) = usb_device.as_mut() {
-        match Command::from_str(cmd) {
-            Some(cmd) => match cmd {
-                Command::Acknowledge => {
-                    info!("Sending acknowledge");
-                    if let Some(port) = &mut dev.serial_port {
-                        let cmd = Command::Acknowledge.to_byte();
-                        port.write(&[cmd]).unwrap();
-                        port.flush().unwrap();
-                        Ok(())
-                    } else {
-                        Err("No serial port".to_string())
-                    }
-                }
-                Command::GetFlashDataInfo => {
-                    info!("Sending get flash data info");
-                    if let Some(port) = &mut dev.serial_port {
-                        let cmd = Command::GetFlashDataInfo.to_byte();
-                        port.write(&[cmd]).unwrap();
-                        port.flush().unwrap();
-                        Ok(())
-                    } else {
-                        Err("No serial port".to_string())
-                    }
-                }
-                Command::GetLogData => {
-                    info!("Sending get log data");
-                    if let Some(port) = &mut dev.serial_port {
-                        let cmd = Command::GetLogData.to_byte();
-                        port.write(&[cmd]).unwrap();
-                        port.flush().unwrap();
-                        Ok(())
-                    } else {
-                        Err("No serial port".to_string())
-                    }
-                }
-                _ => Err("Invalid command".to_string()),
-            },
-            _ => Err("Invalid command data".to_string()),
+    let file_path = match app.dialog().file().blocking_save_file() {
+        Some(p) => {
+            info!("File path selected: {:?}", p);
+            p
         }
-    } else {
-        Err("No USB device connected".to_string())
+        None => {
+            info!("No file path selected, user closed dialog.");
+            return Err(String::from("No file selected"));
+        }
+    };
+    info!("Saving logs to file: {:?}", file_path);
+    let mut logs: Vec<FlightLogData> = flight_logs.lock().unwrap().clone();
+
+    logs.sort_by_key(|log| log.timestamp);
+
+    let csvtext = match crate::utils::export_to_csv(&logs) {
+        Ok(csvtext) => csvtext,
+        Err(e) => {
+            warn!("Failed to convert logs to CSV: {}", e);
+            return Err(String::from("Could not convert files to CSV."));
+        }
+    };
+    match std::fs::write(&file_path, csvtext) {
+        Ok(_) => info!("Saved logs to file: {:?}", file_path),
+        Err(e) => {
+            warn!("Failed to save logs to file: {}", e);
+            return Err(String::from("Could not save files to CSV."));
+        }
     }
+    Ok(String::from(format!("{}", file_path.to_string_lossy())))
 }
 
+/// "log download" sequence.
 #[tauri::command]
-pub fn search_for_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> {
+pub async fn download_logs(
+    app: tauri::AppHandle,
+    logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
+    usb_dev: State<'_, Arc<Mutex<Option<FcUsbDevice>>>>,
+) -> Result<String, String> {
+    info!("download_logs()");
+    logs.lock().unwrap().clear();
+    let mut maybe_dev = usb_dev.lock().unwrap();
+    if let Some(ref mut dev) = *maybe_dev {
+        // send command to get log info
+        match dev.send(&[Command::GetFlashDataInfo.to_byte()]) {
+            Ok(ack) => {
+                if !ack {
+                    warn!("Failed to get log info.");
+                    return Err("Failed to get log info.".to_string());
+                } else {
+                    debug!("Sent {}", Command::GetFlashDataInfo);
+                }
+            }
+            Err(e) => {
+                warn!("Encountered error at send {e}");
+                return Err("Error sending command.".to_string());
+            }
+        };
+
+        // wait for log info response
+        let loginfo_buf = match dev.recv() {
+            Ok(r) => {
+                debug!("Received log info response {} bytes", r.len());
+                r
+            }
+            Err(e) => {
+                warn!("Encountered error at recv {e}");
+                return Err("Error receiving command.".to_string());
+            }
+        };
+        let linfo = LogInfoPage::from_bytes(&loginfo_buf);
+        info!("Log info response: {:?}", linfo);
+
+        // no. of logs to download
+        let num_logs = linfo.n_logs_in_region() as usize;
+        let logs_per_page = linfo.page_size as usize / LOG_SIZE;
+
+        // emit progress
+        emit_log_download_progress(&app, 0, num_logs, 10);
+        let npages = (linfo.block_end_ptr - linfo.block_start_ptr) / linfo.page_size;
+        info!("reading npages={}...", npages);
+
+        // send command to get log data
+        match dev.send(&[Command::GetLogData.to_byte()]) {
+            Ok(ack) => {
+                if !ack {
+                    warn!("Failed to get log data.");
+                    return Err("Failed to get log data.".to_string());
+                } else {
+                    debug!("Sent {}", Command::GetFlashDataInfo);
+                }
+            }
+            Err(e) => {
+                warn!("Encountered error at send {e}");
+                return Err("Error sending command.".to_string());
+            }
+        };
+
+        // read out each page
+        for i in 0..npages {
+            let addr: u32 = linfo.block_start_ptr + (i * linfo.page_size);
+            info!("page@{:4x?} ({i}/{npages})", addr);
+
+            // send the address
+            match dev.send(&addr.to_le_bytes()) {
+                Ok(ack) => {
+                    if !ack {
+                        warn!("Failed to get log data.");
+                        return Err("Failed to get log data.".to_string());
+                    } else {
+                        debug!("Sent {}", addr);
+                    }
+                }
+                Err(e) => {
+                    warn!("Encountered error at send {e}");
+                    return Err("Error sending command.".to_string());
+                }
+            };
+
+            // wait for log data response
+            let page = match dev.recv() {
+                Ok(r) => {
+                    debug!("Received log data response {} bytes", r.len());
+                    r
+                }
+                Err(e) => {
+                    warn!("Encountered error at recv {e}");
+                    return Err("Error receiving command.".to_string());
+                }
+            };
+
+            // get logs out of page
+            for j in 0..(linfo.page_size as usize / LOG_SIZE) {
+                info!(
+                    "log@{:4x?} ({j}/{}",
+                    addr as usize + (j * LOG_SIZE),
+                    linfo.page_size
+                );
+
+                let log_bytes: &[u8; LOG_SIZE] = &page[(j * LOG_SIZE)..((j + 1) * LOG_SIZE)]
+                    .try_into()
+                    .expect("Buffer size mismatch.");
+
+                // if we read an empty page, the log will appear as all 0xFF
+                if !log_bytes.iter().all(|&b| b == 0xFF) {
+                    // push to store
+                    logs.lock()
+                        .unwrap()
+                        .push(FlightLogData::from_bytes(&log_bytes));
+                }
+                // emit progress
+                let current = i as usize * logs_per_page + j;
+                emit_log_download_progress(&app, current, num_logs, logs_per_page);
+            }
+        }
+        // send commmand to end log read
+        let end = 0xFFFFFFFFu32;
+        match dev.send(&end.to_le_bytes()) {
+            Ok(ack) => {
+                if !ack {
+                    warn!("Termination command not acknowledged.");
+                    return Err("Failed to send direct read termination command!".to_string());
+                } else {
+                    debug!("Sent termination command {:08x?}", end);
+                }
+            }
+            Err(e) => {
+                warn!("Encountered error at sending termination command {e}");
+                return Err("Error sending command.".to_string());
+            }
+        };
+        emit_log_download_progress(&app, num_logs, num_logs, 1)
+    }
+    Ok("".to_string())
+}
+
+/// Get logs from cache for display
+#[tauri::command]
+pub async fn get_logs(
+    logs: State<'_, Arc<Mutex<Vec<FlightLogData>>>>,
+) -> Result<Vec<String>, String> {
+    let logs: Vec<String> = logs
+        .lock()
+        .unwrap()
+        .clone()
+        .iter()
+        .map(|l| serde_json::to_string(l).unwrap())
+        .collect();
+    info!("get-logs from cache: {:?}", logs.len());
+    Ok(logs)
+}
+
+/// search for a FC connected via USB
+#[tauri::command]
+pub fn search_for_usb(
+    usb_state: State<'_, Arc<Mutex<Option<FcUsbDevice>>>>,
+) -> Result<bool, String> {
     info!("Searching for USB device...");
     match find_fc() {
         Some(usb_dev) => {
-            info!("Found device.");
-            let mut usb_device = (*usb_state).0.lock().unwrap();
-            *usb_device = Some(usb_dev);
+            let found_dev = match FcUsbDevice::new(usb_dev) {
+                Ok(d) => d,
+                Err(e) => {
+                    info!("Found a device but failed to open it. {e}");
+                    return Ok(false);
+                }
+            };
+
+            let mut usb_device = (*usb_state).lock().unwrap();
+            *usb_device = Some(found_dev);
             Ok(true)
         }
         None => {
@@ -118,23 +247,28 @@ pub fn search_for_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> 
 }
 
 #[tauri::command]
-pub fn disconnect_usb(usb_state: State<UsbDeviceState>) -> Result<bool, String> {
+pub fn disconnect_usb(
+    usb_state: State<'_, Arc<Mutex<Option<FcUsbDevice>>>>,
+) -> Result<bool, String> {
     info!("Disconnecting USB device...");
-    let mut usb_device = (*usb_state).0.lock().unwrap();
-    if let Some(dev) = usb_device.as_mut() {
-        dev.serial_port = None;
-    }
+    let mut usb_device = (*usb_state).lock().unwrap();
     *usb_device = None;
     Ok(false)
 }
 
 /******************************************************************************/
 
-fn find_fc() -> Option<FcUsbDevice> {
+fn find_fc() -> Option<Device<GlobalContext>> {
     match rusb::devices() {
         Ok(device_list) => {
             for device in device_list.iter() {
-                let desc = device.device_descriptor().expect("Couldn't get descriptor");
+                let desc = match device.device_descriptor() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        error!("Error getting device descriptor: {}", e);
+                        continue;
+                    }
+                };
                 info!(
                     "Found vid: pid: {:04x}:{:04x}",
                     desc.vendor_id(),
@@ -142,60 +276,35 @@ fn find_fc() -> Option<FcUsbDevice> {
                 );
                 if desc.vendor_id() == 0x1209 && desc.product_id() == 0x6EF1 {
                     info!("Found FC device");
-                    return Some(FcUsbDevice::new(device, desc));
+                    return Some(device);
+                } else {
+                    continue;
                 }
             }
         }
-        Err(e) => eprintln!("Error obtaining USB devices: {}", e),
+        Err(e) => {
+            error!("Error getting device list: {}", e);
+            return None;
+        }
     }
     None
 }
 
-/// Search COM port for device.
-fn find_device_com_port(vid: u16, pid: u16) -> Option<String> {
-    info!(
-        "Attempting to find COM Port for device {:04x}:{:04x}",
-        vid, pid
-    );
-    match available_ports() {
-        Ok(ports) => {
-            for port in ports {
-                info!("Found port: {}", port.port_name);
-                if let SerialPortType::UsbPort(info) = port.port_type {
-                    info!("Found USB port: {:04x}:{:04x}", info.vid, info.pid);
-                    if info.vid == vid && info.pid == pid {
-                        // found
-                        info!("Found COM port. It's at: {}", port.port_name);
-                        return Some(port.port_name);
-                    }
-                }
-            }
-            None
-        }
-        Err(_) => None,
-    }
-}
-
-/// Connect to com port
-fn connect_to_com_port(vid: u16, pid: u16) -> Option<Box<dyn serialport::SerialPort>> {
-    info!(
-        "Attempting to connect to COM port for device {:04x}:{:04x}",
-        vid, pid
-    );
-    if let Some(port_name) = find_device_com_port(vid, pid) {
-        info!("Opening COM port...");
-        match serialport::new(&port_name, 9600).open() {
-            Ok(port) => {
-                info!("Opened COM port!");
-                Some(port)
-            }
-            Err(e) => {
-                warn!("Failed to open serial port: {}", e);
-                None
+/// Emit progress of log download.
+fn emit_log_download_progress(app: &tauri::AppHandle, count: usize, total: usize, every: usize) {
+    if count % every == 0 {
+        info!("{}/{}", count, total);
+        match app.emit(
+            "progress-data",
+            LogDumpProgress {
+                current: count,
+                total: total,
+            },
+        ) {
+            Ok(_) => {}
+            Err(_) => {
+                warn!("couldn't emit dump progress.");
             }
         }
-    } else {
-        warn!("Device not found");
-        None
     }
 }

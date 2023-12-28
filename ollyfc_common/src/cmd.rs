@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "no_std", no_std)]
 #[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 
@@ -10,12 +9,14 @@ pub const BAUD_RATE: usize = 115200;
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
-    Acknowledge,
-    GetFlashDataInfo,
-    GetLogData,
-    GetFlashDataByBlock,
-    EraseFlash,
-    Invalid,
+    Acknowledge,         // acknowledge
+    GetFlashDataInfo,    // get flash data info
+    GetLogData,          // get flash data
+    GetLogDataTerminate, // terminate a get flash data command
+    GetFlashDataByBlock, // get flash data by block
+    EraseFlash,          // erase the entire flash region
+    Invalid,             // invalid command
+    BadFlashRead,        // abort an operation in progress on the device.
 }
 
 impl Display for Command {
@@ -24,9 +25,11 @@ impl Display for Command {
             Command::Acknowledge => "ack",
             Command::GetFlashDataInfo => "getflashinfo",
             Command::GetLogData => "getflash",
+            Command::GetLogDataTerminate => "getflashterm",
             Command::GetFlashDataByBlock => "getbyblock",
             Command::EraseFlash => "erase",
             Command::Invalid => "invalid",
+            Command::BadFlashRead => "abort",
         };
         write!(f, "{}", cmdstr)
     }
@@ -38,9 +41,11 @@ impl Command {
             0x06 => Command::Acknowledge,
             0x07 => Command::GetFlashDataInfo,
             0x08 => Command::GetLogData,
+            0xC8 => Command::GetLogDataTerminate,
             0x09 => Command::GetFlashDataByBlock,
             0x0A => Command::EraseFlash,
             0x00 => Command::Invalid,
+            0xA6 => Command::BadFlashRead,
             _ => Command::Invalid,
         }
     }
@@ -49,9 +54,11 @@ impl Command {
             Command::Acknowledge => 0x06,
             Command::GetFlashDataInfo => 0x07,
             Command::GetLogData => 0x08,
+            Command::GetLogDataTerminate => 0xC8,
             Command::GetFlashDataByBlock => 0x09,
             Command::EraseFlash => 0x0A,
             Command::Invalid => 0x00,
+            Command::BadFlashRead => 0xA6,
         }
     }
     pub fn from_str(cmdstr: &str) -> Option<Self> {
@@ -59,9 +66,11 @@ impl Command {
             "ack" => Some(Command::Acknowledge),
             "getflashinfo" => Some(Command::GetFlashDataInfo),
             "getflash" => Some(Command::GetLogData),
+            "getflashterm" => Some(Command::GetLogDataTerminate),
             "getbyblock" => Some(Command::GetFlashDataByBlock),
             "erase" => Some(Command::EraseFlash),
             "invalid" => Some(Command::Invalid),
+            "abort" => Some(Command::BadFlashRead),
             _ => None,
         }
     }
@@ -70,9 +79,11 @@ impl Command {
             Command::Acknowledge => "ack",
             Command::GetFlashDataInfo => "getflashinfo",
             Command::GetLogData => "getflash",
+            Command::GetLogDataTerminate => "getflashterm",
             Command::GetFlashDataByBlock => "getbyblock",
             Command::EraseFlash => "erase",
             Command::Invalid => "invalid",
+            Command::BadFlashRead => "abort",
         }
     }
 }

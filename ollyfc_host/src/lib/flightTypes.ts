@@ -1,34 +1,22 @@
-export type SensorInput = {
-  accelX: number;
-  accelY: number;
-  accelZ: number;
+export type FlightLogData = {
+  timestamp: number;
+  accel_x: number;
+  accel_y: number;
+  accel_z: number;
   pitch: number;
   yaw: number;
   roll: number;
-};
-
-export type SBusInput = {
   throttle: number;
   aileron: number;
   elevator: number;
   rudder: number;
+  ctl_throttle: number;
+  ctl_aileron: number
+  ctl_elevator: number;
+  ctl_rudder: number;
   arm: number;
   enable: number;
   record: number;
-};
-
-export type ControlPolicy = {
-  elevator: number;
-  aileron: number;
-  rudder: number;
-  throttle: number;
-};
-
-export type FlightLogData = {
-  timestamp: number;
-  sbusInput: SBusInput;
-  sensorInput: SensorInput;
-  controlPolicy: ControlPolicy;
 };
 
 export type LogInfoPage = {

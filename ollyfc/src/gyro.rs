@@ -1,4 +1,5 @@
 use crate::app::sensor_task;
+
 use mpu6050_dmp::{
     accel::Accel, address::Address, config::DigitalLowPassFilter, quaternion::Quaternion,
     sensor::Mpu6050, yaw_pitch_roll::YawPitchRoll,

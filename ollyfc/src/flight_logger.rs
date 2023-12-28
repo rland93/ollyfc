@@ -2,7 +2,7 @@ use defmt::{debug, error, info};
 use rtic::Mutex;
 use rtic_monotonics::{systick::Systick, Monotonic};
 
-use crate::w25q::{self, FlashMem, MemError};
+use crate::w25q::{self, FlashMem, MemError, PAGE_SIZE};
 
 use ollyfc_common::log::LogInfoPage;
 use ollyfc_common::{FlightLogData, LOG_SIZE};
@@ -75,6 +75,7 @@ impl<T: FlashMem> FlightLogger<T> {
             self.block_size,
             self.n_blocks,
             self.addr_ptr,
+            PAGE_SIZE,
         );
 
         let mut buf = [0u8; LOG_PAGE_SIZE];

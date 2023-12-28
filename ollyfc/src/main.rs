@@ -3,6 +3,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(generic_arg_infer)]
 #![feature(result_option_inspect)]
+#![feature(stmt_expr_attributes)]
 
 /// Hardware
 ///
@@ -16,7 +17,7 @@
 ///
 ///
 ///
-use defmt::{debug, info};
+use defmt::info;
 use defmt_rtt as _;
 use panic_probe as _;
 
@@ -37,7 +38,7 @@ use mpu6050_dmp::sensor::Mpu6050;
 use stm32f4xx_hal::{
     dma::{StreamsTuple, Transfer},
     gpio::{Output, Pin},
-    otg_fs::{UsbBus, UsbBusType, USB},
+    otg_fs::{UsbBusType, USB},
     pac::{DMA2, I2C1, USART1},
     pac::{TIM10, TIM3},
     prelude::*,
@@ -50,7 +51,6 @@ use stm32f4xx_hal::{
 
 // USB
 use usb_device::{class_prelude::UsbBusAllocator, prelude::*};
-use usbd_serial::SerialPort;
 
 use ollyfc_common::{FlightLogData, SensorInput};
 
@@ -89,12 +89,11 @@ mod gyro;
 mod sbus;
 mod usb;
 mod w25q;
+mod xfer_protoc;
 
 // Crate
 use w25q::W25Q;
-
-type FlashPage = [u8; 256];
-const USB_CH_SZ: usize = 4;
+use xfer_protoc::Xfer;
 
 /******************************************************************************/
 
@@ -119,11 +118,11 @@ mod app {
         // Logging
         log_grp_idx: u8,
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
+        // Sensors
         mpu6050: Mpu6050<i2c::I2c<I2C1>>,
         mpu6050_int: Pin<'B', 8>,
         // USB
-        usb_dev: UsbDevice<'static, UsbBus<USB>>,
-        usb_ser: SerialPort<'static, UsbBus<USB>>,
+        xfer: Xfer,
         // Sbus In
         sbus_rx_buffer: Option<&'static mut [u8; SBUS_BUF_SZ]>,
     }
@@ -166,8 +165,45 @@ mod app {
             &clocks,
         );
 
+        // Flight logger setup
+        let logger = flight_logger::FlightLogger::new(mem, 1, 2);
+
+        // USB -
+        info!("USB Button Setup...");
+        let usb_btn = gpioa.pa0.into_pull_up_input();
+        // Wait for gpio setup
+        util_timer.delay_ms(5u32);
+
+        // Check if blue button is pressed and set flight mode
+        let mode: ProgramMode;
+        if usb_btn.is_low() {
+            mode = ProgramMode::FlightMode;
+        } else {
+            mode = ProgramMode::DataMode;
+        }
+        info!("Program mode is set: {:?}", mode);
+
+        // USB - Device setup
+        info!("USB Device Setup...");
+        static mut EP_MEMORY: [u32; 1024] = [0; 1024];
+        static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>> = None;
+
+        let usb = USB {
+            usb_global: dp.OTG_FS_GLOBAL,
+            usb_device: dp.OTG_FS_DEVICE,
+            usb_pwrclk: dp.OTG_FS_PWRCLK,
+            pin_dm: gpioa.pa11.into(),
+            pin_dp: gpioa.pa12.into(),
+            hclk: clocks.hclk(),
+        };
+        let (usb_dev, usb_ser) =
+            crate::usb::usb_setup(usb, unsafe { &mut USB_BUS }, unsafe { &mut EP_MEMORY });
+
+        let mut xfer = Xfer::new(usb_dev, usb_ser);
+
         // Gyroscope
         let mut mpu_int = gpiob.pb8.into_pull_down_input();
+
         let mpu = gyro::mpu_6050_init(
             &mut mpu_int,
             gpiob
@@ -190,11 +226,7 @@ mod app {
         // Channel for log data
         let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
 
-        // Flight logger setup
-        let logger = flight_logger::FlightLogger::new(mem, 1, 2);
-
         // Sbus In: receiving flight commands
-        debug!("sbus in: serial...");
         let mut sbus_in: Rx<USART1, u8> = dp
             .USART1
             .rx(
@@ -208,14 +240,11 @@ mod app {
         sbus_in.listen_idle();
 
         // Sbus In:  DMA stream
-        info!("sbus in: dma...");
         let dma2 = StreamsTuple::new(dp.DMA2);
-
         let sbus_in_buffer_A =
             cortex_m::singleton!(: [u8; SBUS_BUF_SZ] = [0; SBUS_BUF_SZ]).unwrap();
         let sbus_in_buffer_B =
             cortex_m::singleton!(: [u8; SBUS_BUF_SZ] = [0; SBUS_BUF_SZ]).unwrap();
-
         let mut sbus_in_transfer: SbusInTransfer = Transfer::init_peripheral_to_memory(
             dma2.2,
             sbus_in,
@@ -235,43 +264,12 @@ mod app {
         let mut elevator_channel = pwm.split();
         elevator_channel.enable();
 
-        // USB -
-        info!("USB Button Setup...");
-        let usb_btn = gpioa.pa0.into_pull_up_input();
-        // Wait for gpio setup
-        util_timer.delay_ms(5u32);
-
-        // Check if blue button is pressed and set flight mode
-        let mode: ProgramMode;
-        if usb_btn.is_high() {
-            mode = ProgramMode::FlightMode;
-        } else {
-            mode = ProgramMode::DataMode;
-        }
-        info!("Program mode is set: {:?}", mode);
-
-        // USB - Device setup
-        info!("USB Device Setup...");
-        static mut EP_MEMORY: [u32; 1024] = [0; 1024];
-        static mut USB_BUS: Option<UsbBusAllocator<UsbBusType>> = None;
-
-        let usb = USB {
-            usb_global: dp.OTG_FS_GLOBAL,
-            usb_device: dp.OTG_FS_DEVICE,
-            usb_pwrclk: dp.OTG_FS_PWRCLK,
-            pin_dm: gpioa.pa11.into(),
-            pin_dp: gpioa.pa12.into(),
-            hclk: clocks.hclk(),
-        };
-        let (mut usb_dev, mut usb_ser) =
-            crate::usb::usb_setup(usb, unsafe { &mut USB_BUS }, unsafe { &mut EP_MEMORY });
-
-        // USB Mode only! Enter polling loop until host device is connected.
+        // USB Mode: Enter polling loop until host device is connected.
         if mode == ProgramMode::DataMode {
             info!("Data mode initiated. Waiting for USB connection...");
             loop {
-                usb_dev.poll(&mut [&mut usb_ser]);
-                match usb_dev.state() {
+                xfer.dev.poll(&mut [&mut xfer.ser]);
+                match xfer.dev.state() {
                     UsbDeviceState::Configured => {
                         break;
                     }
@@ -301,8 +299,7 @@ mod app {
                 log_grp_idx: 0,
                 mpu6050: mpu,
                 mpu6050_int: mpu_int,
-                usb_dev: usb_dev,
-                usb_ser: usb_ser,
+                xfer: xfer,
                 sbus_rx_buffer: Some(sbus_in_buffer_B),
             },
         )
@@ -315,12 +312,12 @@ mod app {
             // until an interrupt occurs. Since RTIC uses hardware interrupt
             // for scheduling, this basically sleeps until the next task is
             // ready to run.
-            rtic::export::wfi();
+            // rtic::export::wfi();
         }
     }
 
     /// Task for managing the USB connection
-    #[task(priority = 1, shared=[logger], local=[usb_dev, usb_ser])]
+    #[task(priority = 1, shared=[logger], local=[xfer])]
     async fn usb_task(mut cx: usb_task::Context) {
         usb::usb_task_fn(&mut cx).await;
     }
@@ -341,14 +338,14 @@ mod app {
         crate::flight_logger::log_write_task_fn(cx, log_ch_r).await;
     }
 
-    #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]
-    fn sensor_task(mut cx: sensor_task::Context) {
-        crate::gyro::read_sensor_i2c(&mut cx);
-    }
-
     #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer, flight_controls], local = [sbus_rx_buffer])]
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
         crate::sbus::read_sbus_stream(&mut cx);
+    }
+
+    #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]
+    fn sensor_task(mut cx: sensor_task::Context) {
+        crate::gyro::read_sensor_i2c(&mut cx);
     }
 }
 

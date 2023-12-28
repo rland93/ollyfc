@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/primitives";
-  import { emit, listen, type Event } from "@tauri-apps/api/event";
+  import { listen, type Event } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import Progress from "./Progress.svelte";
-  import type { EmitEvent } from "./appTypes";
   import type { LogDumpProgress } from "./usb_state";
 
   let lowerBound: number = 0;
@@ -13,12 +11,11 @@
   onMount(async () => {
     const unlistenSerial = await listen(
       "progress-data",
-      (event: Event<EmitEvent>) => {
+      (event: Event<LogDumpProgress>) => {
         // store data into recvd in a reactive way.
-        const emitted: EmitEvent = event.payload;
-        let progress: LogDumpProgress = JSON.parse(emitted.data);
-        currentValue = progress.current;
-        upperBound = progress.total;
+        // let progress: LogDumpProgress = JSON.parse(event);
+        currentValue = event.payload.current;
+        upperBound = event.payload.total;
       },
     );
   });

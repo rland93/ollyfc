@@ -3,11 +3,9 @@
 
   import { usb, searchUSB } from "./usb_state";
 
-  let sendCmd = async function (cmd: string) {
-    // await searchUSB();
-    let res: string = await invoke("send_usb_command", {
-      cmd: cmd,
-    });
+  let res: string = "";
+  let downloadLogs = async function () {
+    res = await invoke("download_logs");
   };
 </script>
 
@@ -17,21 +15,8 @@
   </div>
   <div class="ui-element2">
     {#if $usb}
-      <button
-        on:click={() => {
-          sendCmd("ack");
-        }}>Ack</button
-      >
-      <button
-        on:click={() => {
-          sendCmd("getflashinfo");
-        }}>Get Info</button
-      >
-      <button
-        on:click={() => {
-          sendCmd("getflash");
-        }}>Get Flash</button
-      >
+      <button on:click={downloadLogs}>load from flash</button>
+      {res}
     {:else}
       <p>Not connected</p>
     {/if}
@@ -40,7 +25,7 @@
 
 <style>
   .dev-cmd {
-    width: 12em;
+    width: 7em;
     flex-shrink: 0;
   }
 </style>

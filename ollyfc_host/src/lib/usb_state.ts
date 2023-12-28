@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/primitives";
 import { writable } from "svelte/store";
+import type { FlightLogData } from "./flightTypes";
 
 
 /***** Types *****/
@@ -19,7 +20,7 @@ export type LogDumpProgress = {
 /***** Stores *****/
 
 export let usb = writable<boolean>(false);
-
+export let logdata = writable<FlightLogData[]>([]);
 
 /***** Functions *****/
 
