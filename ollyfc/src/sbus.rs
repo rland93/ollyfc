@@ -5,6 +5,7 @@ pub struct SbusData {
     raw: [u8; 25],
 }
 
+#[allow(dead_code)]
 pub struct SbusChannels {
     channels: [u16; 16],
     digital_channels: [bool; 8],
@@ -40,18 +41,6 @@ impl FlightControls {
 impl SbusChannels {
     pub fn get_channel_by_no(&self, channel: usize) -> u16 {
         self.channels[channel - 1]
-    }
-
-    pub fn get_digital_channel(&self, channel: usize) -> bool {
-        self.digital_channels[channel - 1]
-    }
-
-    pub fn is_lost_frame(&self) -> bool {
-        self.lost_frame
-    }
-
-    pub fn is_failsafe_activated(&self) -> bool {
-        self.failsafe_activated
     }
 
     pub fn get_input(&self) -> FlightControls {

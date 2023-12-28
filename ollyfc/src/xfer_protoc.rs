@@ -12,7 +12,7 @@
 /// - host sends ack/nack
 ///
 use crc32fast::hash;
-use defmt::{debug, error, info, warn};
+use defmt::{debug, error, warn};
 use rtic_monotonics::systick::{ExtU32, Systick};
 use stm32f4xx_hal::otg_fs::UsbBusType;
 use usb_device::device::UsbDevice;

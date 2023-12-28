@@ -4,7 +4,6 @@
 #![feature(generic_arg_infer)]
 #![feature(result_option_inspect)]
 #![feature(stmt_expr_attributes)]
-#![feature(generic_const_exprs)]
 
 /// Hardware
 ///
@@ -18,7 +17,7 @@
 ///
 ///
 ///
-use defmt::{debug, info};
+use defmt::info;
 use defmt_rtt as _;
 use panic_probe as _;
 
@@ -39,7 +38,7 @@ use mpu6050_dmp::sensor::Mpu6050;
 use stm32f4xx_hal::{
     dma::{StreamsTuple, Transfer},
     gpio::{Output, Pin},
-    otg_fs::{UsbBus, UsbBusType, USB},
+    otg_fs::{UsbBusType, USB},
     pac::{DMA2, I2C1, USART1},
     pac::{TIM10, TIM3},
     prelude::*,
@@ -52,7 +51,6 @@ use stm32f4xx_hal::{
 
 // USB
 use usb_device::{class_prelude::UsbBusAllocator, prelude::*};
-use usbd_serial::SerialPort;
 
 use ollyfc_common::{FlightLogData, SensorInput};
 
@@ -97,9 +95,6 @@ mod xfer_protoc;
 use w25q::W25Q;
 use xfer_protoc::Xfer;
 
-type FlashPage = [u8; 256];
-const USB_CH_SZ: usize = 4;
-
 /******************************************************************************/
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5])]
@@ -111,7 +106,6 @@ mod app {
         // Logging
         logger: flight_logger::FlightLogger<W25Q>,
         // Sensor
-        #[cfg(not(feature = "no-sensors"))]
         gyro: SensorInput,
         // Serial
         sbus_rx_transfer: SbusInTransfer,
@@ -125,9 +119,7 @@ mod app {
         log_grp_idx: u8,
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
         // Sensors
-        #[cfg(not(feature = "no-sensors"))]
         mpu6050: Mpu6050<i2c::I2c<I2C1>>,
-        #[cfg(not(feature = "no-sensors"))]
         mpu6050_int: Pin<'B', 8>,
         // USB
         xfer: Xfer,
@@ -204,16 +196,14 @@ mod app {
             pin_dp: gpioa.pa12.into(),
             hclk: clocks.hclk(),
         };
-        let (mut usb_dev, mut usb_ser) =
+        let (usb_dev, usb_ser) =
             crate::usb::usb_setup(usb, unsafe { &mut USB_BUS }, unsafe { &mut EP_MEMORY });
 
         let mut xfer = Xfer::new(usb_dev, usb_ser);
 
         // Gyroscope
-        #[cfg(not(feature = "no-sensors"))]
         let mut mpu_int = gpiob.pb8.into_pull_down_input();
 
-        #[cfg(not(feature = "no-sensors"))]
         let mpu = gyro::mpu_6050_init(
             &mut mpu_int,
             gpiob
@@ -299,7 +289,6 @@ mod app {
         (
             Shared {
                 logger: logger,
-                #[cfg(not(feature = "no-sensors"))]
                 gyro: SensorInput::default(),
                 sbus_rx_transfer: sbus_in_transfer,
                 flight_controls: sbus::FlightControls::default(),
@@ -308,9 +297,7 @@ mod app {
                 elevator_channel: elevator_channel,
                 log_buffer: [FlightLogData::default(); LOG_BUFF_SZ],
                 log_grp_idx: 0,
-                #[cfg(not(feature = "no-sensors"))]
                 mpu6050: mpu,
-                #[cfg(not(feature = "no-sensors"))]
                 mpu6050_int: mpu_int,
                 xfer: xfer,
                 sbus_rx_buffer: Some(sbus_in_buffer_B),
@@ -354,6 +341,11 @@ mod app {
     #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer, flight_controls], local = [sbus_rx_buffer])]
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
         crate::sbus::read_sbus_stream(&mut cx);
+    }
+
+    #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]
+    fn sensor_task(mut cx: sensor_task::Context) {
+        crate::gyro::read_sensor_i2c(&mut cx);
     }
 }
 

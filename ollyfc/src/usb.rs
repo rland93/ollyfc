@@ -1,23 +1,16 @@
-use crc32fast::hash;
-use defmt::{info, warn};
-use ollyfc_common::{cmd::Command, LOG_SIZE};
+use defmt::{error, info, warn};
+use ollyfc_common::cmd::Command;
 use rtic::Mutex;
-use rtic_monotonics::{
-    systick::{ExtU32, Systick},
-    Monotonic,
-};
-use stm32f4xx_hal::{
-    nb,
-    otg_fs::{UsbBus, UsbBusType, USB},
-};
+use rtic_monotonics::systick::{ExtU32, Systick};
+use stm32f4xx_hal::otg_fs::{UsbBus, UsbBusType, USB};
 use usb_device::{
     class_prelude::UsbBusAllocator,
     device::{StringDescriptors, UsbDevice, UsbDeviceBuilder, UsbVidPid},
     UsbError,
 };
 
+use crate::w25q::PAGE_SIZE;
 use crate::{w25q::MemError, xfer_protoc::HEADER_LEN};
-use crate::{w25q::PAGE_SIZE, xfer_protoc::Xfer};
 
 #[allow(non_snake_case)]
 pub fn usb_setup(
@@ -50,7 +43,7 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
         // receive a command
         let len = match cx.local.xfer.receive(&mut cmd_buf).await {
             Ok(l) => l,
-            Err(e) => {
+            Err(_e) => {
                 warn!("An error occurred in recv.");
                 Systick::delay(1u32.millis()).await;
                 continue;
@@ -70,17 +63,31 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
             Command::Invalid => {
                 info!("Invalid command received");
             }
+
             Command::Acknowledge => {
                 info!("Received acknowledge");
             }
+
             Command::GetFlashDataInfo => {
                 info!("Received get flash data info");
-                get_flash_info_handler(cx).await;
+                match get_flash_info_handler(cx).await {
+                    Ok(_) => {}
+                    Err(_e) => {
+                        error!("an error occurred in flash info handler.");
+                    }
+                };
             }
+
             Command::GetLogData => {
                 info!("Received get log data");
-                get_log_data_handler(cx).await;
+                match get_log_data_handler(cx).await {
+                    Ok(_) => {}
+                    Err(_e) => {
+                        error!("an error occurred in log data handler.");
+                    }
+                };
             }
+
             _ => {
                 info!("Command 0x{:x} not implemented", data[0]);
             }
@@ -88,23 +95,29 @@ pub async fn usb_task_fn(cx: &mut crate::app::usb_task::Context<'_>) {
     }
 }
 
-pub async fn get_flash_info_handler(cx: &mut crate::app::usb_task::Context<'_>) {
+pub async fn get_flash_info_handler(
+    cx: &mut crate::app::usb_task::Context<'_>,
+) -> Result<(), UsbError> {
     // get flash info page
     let mut info = cx.shared.logger.lock(|logger| logger.read_info_page());
     /* TODO: hardcoded for testing */
     info.page_size = PAGE_SIZE;
-    cx.local.xfer.send(&info.to_bytes()).await;
+    info.block_end_ptr = info.block_start_ptr + PAGE_SIZE * 4;
+    cx.local.xfer.send(&info.to_bytes()).await?;
+    Ok(())
 }
 
-pub async fn get_log_data_handler(cx: &mut crate::app::usb_task::Context<'_>) {
+pub async fn get_log_data_handler(
+    cx: &mut crate::app::usb_task::Context<'_>,
+) -> Result<(), UsbError> {
     // enter a loop to acquire log data. That way we can avoid the overhead
     // of needing to call commands for each log entry read.
     let mut rx_buf = [0u8; 10];
     let mut page_buf = [0u8; PAGE_SIZE as usize];
     loop {
         // receive address
-        cx.local.xfer.receive(&mut rx_buf).await;
-        let addr = u32::from_le_bytes(rx_buf[0..4].try_into().unwrap());
+        cx.local.xfer.receive(&mut rx_buf).await?;
+        let addr = u32::from_le_bytes(rx_buf[HEADER_LEN..HEADER_LEN + 4].try_into().unwrap());
 
         info!("Received address: 0x{:x}", addr);
 
@@ -131,7 +144,7 @@ pub async fn get_log_data_handler(cx: &mut crate::app::usb_task::Context<'_>) {
                     MemError::NotAlignedError => {
                         warn!("Not aligned");
                     }
-                    MemError::SpiError(e) => {
+                    MemError::SpiError(_e) => {
                         panic!("SPI error");
                     }
                 }
@@ -140,6 +153,7 @@ pub async fn get_log_data_handler(cx: &mut crate::app::usb_task::Context<'_>) {
         }
 
         // send page
-        cx.local.xfer.send(&page_buf).await;
+        cx.local.xfer.send(&page_buf).await?;
     }
+    Ok(())
 }
