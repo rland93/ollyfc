@@ -166,7 +166,7 @@ mod app {
         );
 
         // Flight logger setup
-        let logger = flight_logger::FlightLogger::new(mem, 1, 2);
+        let logger = flight_logger::FlightLogger::new(mem, 1, 2, false);
 
         // USB -
         info!("USB Button Setup...");

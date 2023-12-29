@@ -6,6 +6,7 @@ pub struct SbusData {
 }
 
 #[allow(dead_code)]
+#[derive(defmt::Format, Clone)]
 pub struct SbusChannels {
     channels: [u16; 16],
     digital_channels: [bool; 8],
@@ -118,8 +119,8 @@ pub fn read_sbus_stream(cx: &mut crate::app::sbus_dma_stream::Context) {
                 // Replace the new buffer with contents from the stream
                 let (buffer, _current) = transfer.next_transfer(new_buf).unwrap();
 
-                let control: SbusChannels = SbusData::new(*buffer).parse();
-                let control: FlightControls = control.get_input();
+                let rx_control: SbusChannels = SbusData::new(*buffer).parse();
+                let control: FlightControls = rx_control.get_input();
                 cx.shared.flight_controls.lock(|fc| {
                     *fc = control;
                 });
