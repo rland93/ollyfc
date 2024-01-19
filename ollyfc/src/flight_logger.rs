@@ -19,10 +19,16 @@ pub struct FlightLogger<T: FlashMem> {
     block_end_ptr: u32,
     block_size: u32,
     n_blocks: u32,
+    enable: bool,
 }
 
 impl<T: FlashMem> FlightLogger<T> {
-    pub fn new(mem: T, start: u32, nblocks: u32) -> Self {
+    // mem: the memory object
+    // start: start address
+    // nblocks: number of blocks to write starting at
+    //     the start address
+    // enable: whether to enable logging to mem
+    pub fn new(mem: T, start: u32, nblocks: u32, enable: bool) -> Self {
         let block_count = w25q::N_BLOCKS_32K as u32;
         let block_size = w25q::BLOCK_32K_SIZE as u32;
 
@@ -47,12 +53,15 @@ impl<T: FlashMem> FlightLogger<T> {
             block_end_ptr: block_end_ptr,
             block_size: block_size,
             n_blocks: nblocks,
+            enable: enable,
         };
         info!(
             "Created logger. start=0x{:x} end=0x{:x} blocksize={} nblocks={}",
             this.block_start_ptr, this.block_end_ptr, this.block_size, this.n_blocks
         );
-        this.write_info_page();
+        if enable {
+            this.write_info_page();
+        }
 
         return this;
     }
@@ -102,21 +111,22 @@ impl<T: FlashMem> FlightLogger<T> {
 
     pub fn log(&mut self, data: &[FlightLogData; LOGS_IN_PAGE]) {
         // erase the sector ahead before writing
-        if self.addr_ptr % self.mem.sector_size() as u32 == 0 {
-            match self.mem.sector_erase(self.addr_ptr) {
-                Ok(_) => (),
-                Err(e) => log_mem_error(e),
-            }
+        if self.enable {
+            if self.addr_ptr % self.mem.sector_size() as u32 == 0 {
+                match self.mem.sector_erase(self.addr_ptr) {
+                    Ok(_) => (),
+                    Err(e) => log_mem_error(e),
+                }
 
-            // also write the address pointer
-            match self.mem.sector_erase(INFO_SECTOR_ADDR) {
-                Ok(_) => (),
-                Err(e) => log_mem_error(e),
+                // also write the address pointer
+                match self.mem.sector_erase(INFO_SECTOR_ADDR) {
+                    Ok(_) => (),
+                    Err(e) => log_mem_error(e),
+                }
+                // writes the current addr ptr.
+                self.write_info_page();
             }
-            // writes the current addr ptr.
-            self.write_info_page();
         }
-
         // serialize onto a page
         let mut buf = [0u8; LOG_PAGE_SIZE];
         for (i, log) in data.iter().enumerate() {
@@ -124,15 +134,17 @@ impl<T: FlashMem> FlightLogger<T> {
         }
 
         // write the page
-        info!("Writing page at 0x{:x}", self.addr_ptr);
-        match self.mem.page_program(self.addr_ptr, &buf) {
-            Ok(_) => (),
-            Err(e) => match e {
-                MemError::SpiError(_) => error!("SPI error"),
-                MemError::NotAlignedError => error!("Page not aligned"),
-                MemError::OutOfBoundsError => error!("Data out of bounds"),
-            },
-        };
+        if self.enable {
+            info!("Writing page at 0x{:x}", self.addr_ptr);
+            match self.mem.page_program(self.addr_ptr, &buf) {
+                Ok(_) => (),
+                Err(e) => match e {
+                    MemError::SpiError(_) => error!("SPI error"),
+                    MemError::NotAlignedError => error!("Page not aligned"),
+                    MemError::OutOfBoundsError => error!("Data out of bounds"),
+                },
+            };
+        }
 
         // increment the address pointer
         self.incr_addr_ptr();
@@ -208,19 +220,19 @@ pub async fn log_write_task_fn(
         };
         // Store the received data in the log buffer, and when the group index is high enough, reset it and write to flash.
 
-        let now = Systick::now().ticks();
+        let _now = Systick::now().ticks();
 
         cx.local.log_buffer[*cx.local.log_grp_idx as usize] = data;
         *cx.local.log_grp_idx += 1;
-        info!(
-            "{} Write: recvd log from {}:\t{} of {} for {} of {} bytes",
-            now,
-            data.timestamp,
-            *cx.local.log_grp_idx,
-            LOGS_IN_PAGE,
-            *cx.local.log_grp_idx as usize * LOG_SIZE,
-            LOG_PAGE_SIZE,
-        );
+        // debug!(
+        //     "{} Write: recvd log from {}:\t{} of {} for {} of {} bytes",
+        //     now,
+        //     data.timestamp,
+        //     *cx.local.log_grp_idx,
+        //     LOGS_IN_PAGE,
+        //     *cx.local.log_grp_idx as usize * LOG_SIZE,
+        //     LOG_PAGE_SIZE,
+        // );
         if *cx.local.log_grp_idx as usize >= LOGS_IN_PAGE {
             *cx.local.log_grp_idx = 0;
 

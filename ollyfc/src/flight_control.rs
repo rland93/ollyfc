@@ -1,3 +1,4 @@
+use defmt::info;
 use rtic::Mutex;
 use rtic_monotonics::{
     systick::{ExtU32, Systick},
@@ -6,7 +7,7 @@ use rtic_monotonics::{
 
 use ollyfc_common::{ControlPolicy, FlightLogData, SBusInput, SensorInput};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, defmt::Format)]
 enum SwitchMode {
     Low,
     Neutral,
@@ -15,9 +16,9 @@ enum SwitchMode {
 
 fn switch_mode(switch_input: u16) -> SwitchMode {
     if switch_input < 500 {
-        SwitchMode::Low
-    } else if switch_input > 1500 {
         SwitchMode::High
+    } else if switch_input > 1500 {
+        SwitchMode::Low
     } else {
         SwitchMode::Neutral
     }
@@ -68,6 +69,10 @@ pub async fn flight_loop(
         let enable_mode = switch_mode(controls.enable);
         let record_mode = switch_mode(controls.record);
 
+        info!(
+            "rec: {}, arm: {}, en: {}",
+            record_mode, arm_mode, enable_mode
+        );
         // Sensor
         let gyro = cx.shared.gyro.lock(|g: &mut SensorInput| g.clone());
         #[cfg(feature = "no-sensors")]
@@ -106,6 +111,9 @@ pub async fn flight_loop(
                 ctl_throttle: thr,
             },
         };
+        if record_mode == SwitchMode::High {
+            info!("Sending log data");
+        }
         log_ch_s
             .send(log_data)
             .await

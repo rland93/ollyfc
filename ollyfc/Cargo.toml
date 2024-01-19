@@ -17,7 +17,8 @@ rtic-monotonics = {version="1.4.1", features = ["cortex-m-systick"]}
 rtic-monotonic = "1.0.0"
 
 stm32f4xx-hal = {  git = "https://github.com/stm32-rs/stm32f4xx-hal.git", rev = "a68a3a1", features = ["stm32f411", "rtic", "usb_fs"] }
-mpu6050-dmp = { git= "https://github.com/barafael/mpu6050-dmp-rs.git"}
+bmi160 = "0.1.2"
+bmp388 = "0.1.0"
 
 usbd-serial = {version= "0.2.0"}
 usb-device = {version= "0.3.1"}

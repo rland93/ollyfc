@@ -31,9 +31,6 @@ use rtic_sync::{
 use stm32f4xx_hal::gpio::Alternate;
 use stm32f4xx_hal::{i2c, pac, rcc};
 
-// Sensor
-use mpu6050_dmp::sensor::Mpu6050;
-
 // HAL
 use stm32f4xx_hal::{
     dma::{StreamsTuple, Transfer},
@@ -85,7 +82,6 @@ enum ProgramMode {
 
 mod flight_control;
 mod flight_logger;
-mod gyro;
 mod sbus;
 mod usb;
 mod w25q;
@@ -119,8 +115,7 @@ mod app {
         log_grp_idx: u8,
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
         // Sensors
-        mpu6050: Mpu6050<i2c::I2c<I2C1>>,
-        mpu6050_int: Pin<'B', 8>,
+
         // USB
         xfer: Xfer,
         // Sbus In
@@ -201,28 +196,6 @@ mod app {
 
         let mut xfer = Xfer::new(usb_dev, usb_ser);
 
-        // Gyroscope
-        let mut mpu_int = gpiob.pb8.into_pull_down_input();
-
-        let mpu = gyro::mpu_6050_init(
-            &mut mpu_int,
-            gpiob
-                .pb6
-                .into_alternate()
-                .internal_pull_up(true)
-                .set_open_drain(),
-            gpiob
-                .pb7
-                .into_alternate()
-                .internal_pull_up(true)
-                .set_open_drain(),
-            dp.I2C1,
-            &mut dp.EXTI,
-            &mut syscfg,
-            &clocks,
-            &mut dp.TIM2.delay_us(&clocks),
-        );
-
         // Channel for log data
         let (log_ch_s, log_ch_r) = make_channel!(FlightLogData, LOGDATA_CHAN_SIZE);
 
@@ -297,8 +270,6 @@ mod app {
                 elevator_channel: elevator_channel,
                 log_buffer: [FlightLogData::default(); LOG_BUFF_SZ],
                 log_grp_idx: 0,
-                mpu6050: mpu,
-                mpu6050_int: mpu_int,
                 xfer: xfer,
                 sbus_rx_buffer: Some(sbus_in_buffer_B),
             },
@@ -341,11 +312,6 @@ mod app {
     #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer, flight_controls], local = [sbus_rx_buffer])]
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
         crate::sbus::read_sbus_stream(&mut cx);
-    }
-
-    #[task(binds=EXTI9_5, local=[mpu6050, mpu6050_int], shared=[gyro])]
-    fn sensor_task(mut cx: sensor_task::Context) {
-        crate::gyro::read_sensor_i2c(&mut cx);
     }
 }
 
