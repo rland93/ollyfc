@@ -74,7 +74,7 @@ pub async fn flight_loop(
             record_mode, arm_mode, enable_mode
         );
         // Sensor
-        let gyro = cx.shared.gyro.lock(|g: &mut SensorInput| g.clone());
+        let gyro = cx.shared.sensor.lock(|g: &mut SensorInput| g.clone());
         #[cfg(feature = "no-sensors")]
         let gyro = SensorInput::default();
 

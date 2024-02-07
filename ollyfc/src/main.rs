@@ -35,8 +35,9 @@ use stm32f4xx_hal::{i2c, pac, rcc};
 use stm32f4xx_hal::{
     dma::{StreamsTuple, Transfer},
     gpio::{Output, Pin},
+    i2c::I2c1,
     otg_fs::{UsbBusType, USB},
-    pac::{DMA2, I2C1, USART1},
+    pac::{DMA2, USART1},
     pac::{TIM10, TIM3},
     prelude::*,
     serial::{Config, Rx},
@@ -44,6 +45,11 @@ use stm32f4xx_hal::{
     timer::Delay,
     timer::{Channel3, PwmChannel},
     {dma, serial},
+};
+
+// Sensor
+use bmi160::{
+    AccelerometerPowerMode, Bmi160, GyroscopePowerMode, MagnetometerData, Sensor3DData, SlaveAddr,
 };
 
 // USB
@@ -83,6 +89,7 @@ enum ProgramMode {
 mod flight_control;
 mod flight_logger;
 mod sbus;
+mod sensor;
 mod usb;
 mod w25q;
 mod xfer_protoc;
@@ -93,7 +100,7 @@ use xfer_protoc::Xfer;
 
 /******************************************************************************/
 
-#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5])]
+#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4, TIM5, USART6])]
 mod app {
 
     use super::*;
@@ -102,7 +109,8 @@ mod app {
         // Logging
         logger: flight_logger::FlightLogger<W25Q>,
         // Sensor
-        gyro: SensorInput,
+        sensor: SensorInput,
+
         // Serial
         sbus_rx_transfer: SbusInTransfer,
         flight_controls: sbus::FlightControls,
@@ -115,7 +123,7 @@ mod app {
         log_grp_idx: u8,
         log_buffer: [FlightLogData; LOG_BUFF_SZ],
         // Sensors
-
+        gyro: Option<Bmi160<bmi160::interface::I2cInterface<I2c1>>>,
         // USB
         xfer: Xfer,
         // Sbus In
@@ -171,8 +179,46 @@ mod app {
 
         // Check if blue button is pressed and set flight mode
         let mode: ProgramMode;
+        let mut imu = None;
         if usb_btn.is_low() {
             mode = ProgramMode::FlightMode;
+
+            // Set up sensor
+            info!("Set up i2c");
+            let scl = gpiob.pb6.into_alternate_open_drain();
+            let sda = gpiob.pb7.into_alternate_open_drain();
+            let i2c_dev = dp.I2C1.i2c((scl, sda), 400u32.kHz(), &clocks);
+            imu = Some(bmi160::Bmi160::new_with_i2c(
+                i2c_dev,
+                SlaveAddr::Alternative(false),
+            ));
+
+            info!("Set up BMI160");
+            imu.as_mut()
+                .unwrap()
+                .set_accel_power_mode(AccelerometerPowerMode::Normal)
+                .unwrap();
+            imu.as_mut()
+                .unwrap()
+                .set_gyro_power_mode(GyroscopePowerMode::Normal)
+                .unwrap();
+            imu.as_mut()
+                .unwrap()
+                .set_magnet_power_mode(bmi160::MagnetometerPowerMode::Normal)
+                .unwrap();
+
+            imu.as_mut()
+                .unwrap()
+                .set_accel_range(bmi160::AccelerometerRange::G8)
+                .unwrap();
+
+            imu.as_mut()
+                .unwrap()
+                .set_gyro_range(bmi160::GyroRange::Scale500)
+                .unwrap();
+
+            let cid = imu.as_mut().unwrap().chip_id().unwrap();
+            info!("BMX160 Chip ID: {:04x}", cid);
         } else {
             mode = ProgramMode::DataMode;
         }
@@ -257,12 +303,13 @@ mod app {
             info!("Flight mode initiated. Ignoring USB connection.");
             primary_flight_loop_task::spawn(log_ch_s).unwrap();
             log_write_task::spawn(log_ch_r).unwrap();
+            gyro_task::spawn().unwrap();
         }
 
         (
             Shared {
                 logger: logger,
-                gyro: SensorInput::default(),
+                sensor: SensorInput::default(),
                 sbus_rx_transfer: sbus_in_transfer,
                 flight_controls: sbus::FlightControls::default(),
             },
@@ -270,6 +317,7 @@ mod app {
                 elevator_channel: elevator_channel,
                 log_buffer: [FlightLogData::default(); LOG_BUFF_SZ],
                 log_grp_idx: 0,
+                gyro: imu,
                 xfer: xfer,
                 sbus_rx_buffer: Some(sbus_in_buffer_B),
             },
@@ -281,9 +329,9 @@ mod app {
         loop {
             // wait for interrupt. This will put cortex_m to a low power mode
             // until an interrupt occurs. Since RTIC uses hardware interrupt
-            // for scheduling, this basically sleeps until the next task is
-            // ready to run.
-            // rtic::export::wfi();
+            // for scheduling, this basically sleeps until the scheduler runs
+            // next.
+            rtic::export::wfi();
         }
     }
 
@@ -293,7 +341,7 @@ mod app {
         usb::usb_task_fn(&mut cx).await;
     }
 
-    #[task(priority = 3, shared=[flight_controls, gyro], local=[elevator_channel])]
+    #[task(priority = 3, shared=[flight_controls, sensor], local=[elevator_channel])]
     async fn primary_flight_loop_task(
         cx: primary_flight_loop_task::Context,
         log_ch_s: Sender<'static, FlightLogData, LOGDATA_CHAN_SIZE>,
@@ -312,6 +360,11 @@ mod app {
     #[task(binds = DMA2_STREAM2, priority=3, shared = [sbus_rx_transfer, flight_controls], local = [sbus_rx_buffer])]
     fn sbus_dma_stream(mut cx: sbus_dma_stream::Context) {
         crate::sbus::read_sbus_stream(&mut cx);
+    }
+
+    #[task(priority = 2, shared=[sensor], local=[gyro])]
+    async fn gyro_task(mut cx: gyro_task::Context) {
+        crate::sensor::gyro_task_fn(&mut cx).await;
     }
 }
 

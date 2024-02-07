@@ -10,7 +10,8 @@ use bmi160::Bmi160;
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers=[TIM4])]
 mod app {
     use bmi160::{
-        AccelerometerPowerMode, GyroscopePowerMode, MagnetometerData, Sensor3DData, SlaveAddr,
+        AccelerometerPowerMode, AccelerometerRange, GyroRange, GyroscopePowerMode,
+        MagnetometerData, Sensor3DData, SlaveAddr,
     };
     use defmt::info;
     use rtic_monotonics::{systick::Systick, Monotonic};
@@ -69,11 +70,13 @@ mod app {
     #[task(local=[imu])]
     async fn sensor_task(cx: sensor_task::Context) {
         let imu = cx.local.imu;
+
+        let mut tictoc = 0u32;
         loop {
             let now = Systick::now();
             info!("Sensor task: {}", now.ticks());
 
-            let selector = bmi160::SensorSelector::new().accel().gyro().time().magnet();
+            let selector = bmi160::SensorSelector::new().accel().gyro();
             let data = match imu.data(selector) {
                 Ok(d) => d,
                 Err(e) => {
@@ -95,13 +98,6 @@ mod app {
                 hall_resistence: u16::MAX,
             };
 
-            let time = match data.time {
-                Some(t) => t,
-                None => {
-                    defmt::debug!("No time data");
-                    0
-                }
-            };
             let accel = match data.accel {
                 Some(a) => a,
                 None => {
@@ -116,30 +112,27 @@ mod app {
                     default_3ddata
                 }
             };
-            let magnet = match data.magnet {
-                Some(m) => m,
-                None => {
-                    defmt::debug!("No magnetometer data");
-                    default_magnetometer
-                }
-            };
 
             info!(
-                "Time: {}, Accel: [{} {} {}], Gyro: [{} {} {}], Magnetometer: [{} {} {}] r{}",
-                time,
-                accel.x,
-                accel.y,
-                accel.z,
-                gyro.x,
-                gyro.y,
-                gyro.z,
-                magnet.axes.x,
-                magnet.axes.y,
-                magnet.axes.z,
-                magnet.hall_resistence
+                "Accel: [{} {} {}], Gyro: [{} {} {}]",
+                accel.x, accel.y, accel.z, gyro.x, gyro.y, gyro.z,
             );
 
-            Systick::delay_until(now + 20u32.millis()).await;
+            let mut accrange = AccelerometerRange::G2;
+            let mut gyrorange = GyroRange::Scale125;
+            if tictoc % 2 == 0 {
+                defmt::debug!("Setting accel range to G2");
+                imu.set_accel_range(AccelerometerRange::G2).unwrap();
+                imu.set_gyro_range(GyroRange::Scale125);
+            } else {
+                defmt::debug!("Setting accel range to G8");
+                imu.set_accel_range(AccelerometerRange::G8).unwrap();
+                imu.set_gyro_range(GyroRange::Scale2000);
+            }
+
+            tictoc += 1;
+
+            Systick::delay_until(now + 500u32.millis()).await;
         }
     }
 }
