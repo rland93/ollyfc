@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "ollyfc")(type "KiCad")(uri "${KIPRJMOD}/ollyfc.pretty")(options "")(descr ""))
+)
