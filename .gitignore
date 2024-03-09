@@ -38,13 +38,21 @@ dist-ssr
 *.sln
 *.sw?
 
-# KiCad
-*.bak
-*.kicad_prl
-*.kicad_pro.user
-*.sch-bak
-fp-info-cache
-*-cache.lib
-project-name-rescue.lib
-autosave/
-ollyfc-backups
+# Ignore generated files
+hardware/board/*.pro
+hardware/board/*.sch
+hardware/board/*.kicad_pcb
+hardware/board/*.bak
+hardware/board/*.kicad_pcb-bak
+hardware/board/*.kicad_wks
+hardware/board/*.kicad_wks-bak
+hardware/board/*.pretty
+
+# Ignore project-specific backup files
+hardware/board/backup
+
+# Ignore autosave files
+hardware/board/autosave
+
+# Ignore KiCad project cache files
+hardware/board/*.cache
