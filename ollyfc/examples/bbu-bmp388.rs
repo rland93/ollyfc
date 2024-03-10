@@ -110,13 +110,21 @@ mod app {
 
     #[task(shared=[psens], local=[])]
     async fn pressure_task(mut cx: pressure_task::Context) {
-        let alt: f64 = cx.shared.psens.lock(|psens| {
-            psens.altitude().unwrap_or_else(|e| {
+        let (alt, temp): (f64, f64) = cx.shared.psens.lock(|psens| {
+            let a = psens.altitude().unwrap_or_else(|e| {
                 log::log_err(log::err_i2c_h(e));
                 panic!()
-            })
+            });
+            let t = psens
+                .sensor_values()
+                .unwrap_or_else(|e| {
+                    log::log_err(log::err_i2c_h(e));
+                    panic!()
+                })
+                .temperature;
+            (a, t)
         });
 
-        info!("Altitude: {}m", alt);
+        info!("Altitude: {}m, Temp {}", alt, temp);
     }
 }
