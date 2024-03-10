@@ -5,6 +5,7 @@ use stm32f4xx_hal::i2c;
 pub enum ErrLog {
     I2C(u8),
     BMP388(u8),
+    OS(u8),
 }
 
 // handler for logging i2c errors
@@ -36,11 +37,22 @@ pub fn err_pres_h(err: bmp388::Error) -> ErrLog {
     }
 }
 
+// os errors
+pub enum RticErr {
+    SpawnFail,
+}
+
+// handler for os errors
+pub fn err_os_h(err: RticErr) -> ErrLog {
+    ErrLog::OS(err as u8)
+}
+
 // For now, just print to the RTT console. TODO: add datalog specifically for
 // events and errors.
 pub fn log_err(err: ErrLog) {
     match err {
         ErrLog::I2C(e) => error!("I2C {:x}", e),
         ErrLog::BMP388(e) => error!("BMP388 {:x}", e),
+        ErrLog::OS(e) => error!("OS {:x}", e),
     }
 }

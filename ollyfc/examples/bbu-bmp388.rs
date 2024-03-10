@@ -17,14 +17,16 @@ mod app {
     use defmt::info;
     use ollyfc::{err::log, sensor::pressure::BMP388_CFG};
     use rtic_monotonics::Monotonic;
-    use stm32f4xx_hal::{gpio::Edge, i2c::I2c1, pac::EXTI, prelude::*};
+    use stm32f4xx_hal::{gpio::Edge, i2c::I2c1, prelude::*};
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+        psens: bmp388::BMP388<I2c1, Blocking>,
+    }
 
     #[local]
     struct Local {
-        psens: bmp388::BMP388<I2c1, Blocking>,
+        pres_int: stm32f4xx_hal::gpio::Pin<'C', 1>,
     }
 
     #[init]
@@ -33,7 +35,7 @@ mod app {
 
         let rcc = dp.RCC.constrain();
         let hse = 16.MHz();
-        let sysclk = 16.MHz();
+        let sysclk = 48.MHz();
         let clocks = rcc
             .cfgr
             .use_hse(hse)
@@ -62,48 +64,59 @@ mod app {
                 panic!()
             });
         info!("interrupt...");
-        let mut pres_int_pin = gpioc.pc1.into_pull_up_input();
+        let mut pres_int_pin = gpioc.pc1.into_pull_down_input();
         pres_int_pin.make_interrupt_source(&mut syscfg);
         pres_int_pin.trigger_on_edge(&mut dp.EXTI, Edge::Rising);
         pres_int_pin.enable_interrupt(&mut dp.EXTI);
-        unsafe { cortex_m::peripheral::NVIC::unmask(pres_int_pin.interrupt()) }
         info!("Setup completed.");
 
-        (Shared {}, Local { psens: sensor })
+        (
+            Shared { psens: sensor },
+            Local {
+                pres_int: pres_int_pin,
+            },
+        )
     }
 
-    #[task(binds = EXTI1)]
-    fn pres_int(cx: pres_int::Context) {
-        defmt::debug!("new pressure data.");
+    #[task(binds = EXTI1, shared=[psens], local=[pres_int])]
+    fn pres_int(mut cx: pres_int::Context) {
+        // Spawn the pressure s/w task.
+        pressure_task::spawn().unwrap_or_else(|_| {
+            log::log_err(log::err_os_h(log::RticErr::SpawnFail));
+            panic!()
+        });
+
+        // clear interrupt status
+        cx.shared.psens.lock(|psens| {
+            // Reset the interrupt
+            let int_status = psens.int_status().unwrap_or_else(|e| {
+                log::log_err(log::err_i2c_h(e));
+                panic!()
+            });
+
+            // Should never hit!
+            if !int_status.data_ready {
+                let err = bmp388::Error {
+                    fatal: true,
+                    cmd: false,
+                    config: false,
+                };
+                log::log_err(log::err_pres_h(err))
+            }
+        });
+
+        cx.local.pres_int.clear_interrupt_pending_bit();
     }
 
-    #[task(local=[psens], shared=[])]
+    #[task(shared=[psens], local=[])]
     async fn pressure_task(mut cx: pressure_task::Context) {
-        info!("Exercising pressure sensor...");
-        let sensor = cx.local.psens;
-
-        // 500 ms loop to read sensor values
-        loop {
-            let now = rtic_monotonics::systick::Systick::now();
-
-            let status = sensor.status().unwrap_or_else(|e| {
+        let alt: f64 = cx.shared.psens.lock(|psens| {
+            psens.altitude().unwrap_or_else(|e| {
                 log::log_err(log::err_i2c_h(e));
                 panic!()
-            });
+            })
+        });
 
-            info!(
-                "status: p={:?} t={:?} c={:?}",
-                status.pressure_data_ready, status.temperature_data_ready, status.command_ready
-            );
-
-            let alt = sensor.altitude().unwrap_or_else(|e| {
-                log::log_err(log::err_i2c_h(e));
-                panic!()
-            });
-
-            info!("altitude: {:?}", alt);
-
-            rtic_monotonics::systick::Systick::delay_until(now + 50u32.millis()).await;
-        }
+        info!("Altitude: {}m", alt);
     }
 }

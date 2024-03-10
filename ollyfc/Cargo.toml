@@ -18,7 +18,7 @@ rtic-monotonics = {version="1.4.1", features = ["cortex-m-systick"]}
 rtic-monotonic = "1.0.0"
 
 stm32f4xx-hal = { version="0.20", features = ["stm32f411", "usb_fs"] }
-bmp388 = {git = "https://github.com/ibutra/bmp388.git", rev = "2a1dc04", features=["config-builder"]}
+bmp388 = {git = "https://github.com/rland93/bmp388.git", rev = "fa79c4e", features=["config-builder"]}
 libm = "0.2.8"
 usbd-serial = {version= "0.2.0"}
 usb-device = {version= "0.3.1"}
