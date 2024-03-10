@@ -16,7 +16,6 @@ mod app {
     use bmp388::Blocking;
     use defmt::info;
     use ollyfc::{err::log, sensor::pressure::BMP388_CFG};
-    use rtic_monotonics::Monotonic;
     use stm32f4xx_hal::{gpio::Edge, i2c::I2c1, prelude::*};
 
     #[shared]
@@ -86,25 +85,7 @@ mod app {
             panic!()
         });
 
-        // clear interrupt status
-        cx.shared.psens.lock(|psens| {
-            // Reset the interrupt
-            let int_status = psens.int_status().unwrap_or_else(|e| {
-                log::log_err(log::err_i2c_h(e));
-                panic!()
-            });
-
-            // Should never hit!
-            if !int_status.data_ready {
-                let err = bmp388::Error {
-                    fatal: true,
-                    cmd: false,
-                    config: false,
-                };
-                log::log_err(log::err_pres_h(err))
-            }
-        });
-
+        // clear pending
         cx.local.pres_int.clear_interrupt_pending_bit();
     }
 
@@ -122,6 +103,22 @@ mod app {
                     panic!()
                 })
                 .temperature;
+
+            // Reset the interrupt
+            let int_status = psens.int_status().unwrap_or_else(|e| {
+                log::log_err(log::err_i2c_h(e));
+                panic!()
+            });
+
+            // Should never hit!
+            if !int_status.data_ready {
+                let err = bmp388::Error {
+                    fatal: true,
+                    cmd: false,
+                    config: false,
+                };
+                log::log_err(log::err_pres_h(err))
+            }
             (a, t)
         });
 
