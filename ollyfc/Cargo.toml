@@ -10,6 +10,7 @@ cortex-m = "0.7.7"
 defmt = "0.3.5"
 defmt-rtt = "0.4"
 panic-probe = {version = "0.3", features = ["print-defmt"]}
+embedded-hal = "1"
 
 rtic = { version="2.0.1", features = ["thumbv7-backend"]}
 rtic-sync ={ version="1.0.2"}
@@ -17,8 +18,7 @@ rtic-monotonics = {version="1.4.1", features = ["cortex-m-systick"]}
 rtic-monotonic = "1.0.0"
 
 stm32f4xx-hal = { version="0.20", features = ["stm32f411", "usb_fs"] }
-bmi160 = {git = "https://github.com/rland93/bmi160-rs.git", branch = "master"}
-bmp388 = "0.1.0"
+bmp388 = {git = "https://github.com/ibutra/bmp388.git", rev = "2a1dc04", features=["config-builder"]}
 libm = "0.2.8"
 usbd-serial = {version= "0.2.0"}
 usb-device = {version= "0.3.1"}
