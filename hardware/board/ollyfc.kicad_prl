@@ -62,8 +62,8 @@
       36,
       40
     ],
-    "visible_layers": "f101030_ffffffff",
-    "zone_display_mode": 0
+    "visible_layers": "c001032_ffffffff",
+    "zone_display_mode": 1
   },
   "meta": {
     "filename": "ollyfc.kicad_prl",
