@@ -5,6 +5,7 @@ use stm32f4xx_hal::i2c;
 pub enum ErrLog {
     I2C(u8),
     BMP388(u8),
+    LIS3MDL(u8),
     OS(u8),
 }
 
@@ -37,6 +38,15 @@ pub fn err_pres_h(err: bmp388::Error) -> ErrLog {
     }
 }
 
+// handler for lis3mdl errors
+pub fn err_mag_h(err: lis3mdl::Error) -> ErrLog {
+    match err {
+        lis3mdl::Error::InvalidValue => ErrLog::LIS3MDL(0x01),
+        lis3mdl::Error::IncorrectDeviceIdFound => ErrLog::LIS3MDL(0x02),
+        lis3mdl::Error::CommunicationError => ErrLog::I2C(0x03),
+    }
+}
+
 // os errors
 pub enum RticErr {
     SpawnFail,
@@ -54,5 +64,6 @@ pub fn log_err(err: ErrLog) {
         ErrLog::I2C(e) => error!("I2C {:x}", e),
         ErrLog::BMP388(e) => error!("BMP388 {:x}", e),
         ErrLog::OS(e) => error!("OS {:x}", e),
+        ErrLog::LIS3MDL(e) => error!("LIS3MDL {:x}", e),
     }
 }
