@@ -1,6 +1,5 @@
 use bmp388::config::{InterruptConfig, OversamplingConfig};
 use bmp388::Config;
-use bmp388::SamplingRate;
 
 // BST-BMP388-DS001-07 Rev 1.7 112020
 // Section 3.5, Table 10, "Filter Selection"
