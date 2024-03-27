@@ -56,4 +56,4 @@ hardware/board/autosave
 
 # Ignore KiCad project cache files
 hardware/board/*.cache
-hardware/board/ollyfc-backups/*
+hardware/board/ollyfc-backups
