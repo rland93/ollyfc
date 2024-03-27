@@ -28,6 +28,7 @@ shared-bus = "0.3.1"
 # Sensors
 lis3mdl = {git = "https://github.com/ryanrightmer/lis3mdl.git", rev = "b738822"}
 bmp388 = {git = "https://github.com/rland93/bmp388.git", rev = "fa79c4e", features=["config-builder"]}
+bmi088 = {git = "https://github.com/rland93/bmi088-rs.git", branch = "main"}
 
 # Internal
 ollyfc_common = { path = "../ollyfc_common", features=["no_std"]}
