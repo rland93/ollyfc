@@ -1,8 +1,8 @@
 {
   "board": {
-    "active_layer": 31,
+    "active_layer": 1,
     "active_layer_preset": "",
-    "auto_track_width": true,
+    "auto_track_width": false,
     "hidden_netclasses": [],
     "hidden_nets": [],
     "high_contrast_mode": 0,
@@ -34,7 +34,6 @@
       3,
       4,
       5,
-      8,
       9,
       10,
       11,
@@ -62,8 +61,8 @@
       36,
       40
     ],
-    "visible_layers": "c001032_ffffffff",
-    "zone_display_mode": 1
+    "visible_layers": "8001030_fffffffd",
+    "zone_display_mode": 0
   },
   "meta": {
     "filename": "ollyfc.kicad_prl",
