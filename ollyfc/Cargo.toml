@@ -30,6 +30,9 @@ embedded-hdc1080-rs = {git = "https://github.com/rhomber/hdc1080-embedded-rs"}
 lis3mdl = {git = "https://github.com/ryanrightmer/lis3mdl.git", rev = "b738822"}
 bmp388 = {git = "https://github.com/rland93/bmp388.git", rev = "fa79c4e", features=["config-builder"]}
 
+# io
+pwm-pca9685 = "0.3"
+
 # Internal
 ollyfc_common = { path = "../ollyfc_common", features=["no_std"]}
 
