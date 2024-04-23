@@ -9,33 +9,30 @@ cortex-m = "0.7.7"
 
 defmt = "0.3.5"
 defmt-rtt = "0.4"
-panic-probe = {version = "0.3", features = ["print-defmt"]}
+panic-probe = {version = "0.3", features = ["print-defmt"] }
 embedded-hal = "1"
 
-rtic = { version="2.0.1", features = ["thumbv7-backend"]}
-rtic-sync ={ version="1.0.2"}
-rtic-monotonics = {version="1.4.1", features = ["cortex-m-systick"]}
+rtic = { version="2.0.1", features = ["thumbv7-backend"] }
+rtic-monotonics = {version="1.4.1", features = ["cortex-m-systick"] }
 rtic-monotonic = "1.0.0"
 
 # Peripherals
-stm32f4xx-hal = { version="0.20", features = ["stm32f401", "usb_fs", ] }
+stm32f4xx-hal = { version="0.20", features = ["stm32f401", "usb_fs" ] }
 libm = "0.2.8"
 usbd-serial = {version= "0.2.0"}
 usb-device = {version= "0.3.1"}
 crc32fast = {version = "1.3", default-features = false}
-shared-bus = "0.3.1"
 
 # Sensors
-embedded-hdc1080-rs = {git = "https://github.com/rhomber/hdc1080-embedded-rs"}
-lis3mdl = {git = "https://github.com/ryanrightmer/lis3mdl.git", rev = "b738822"}
-bmp388 = {git = "https://github.com/rland93/bmp388.git", rev = "fa79c4e", features=["config-builder"]}
+embedded-hdc1080-rs = {git = "https://github.com/rhomber/hdc1080-embedded-rs" }
+lis3mdl = {git = "https://github.com/ryanrightmer/lis3mdl.git", rev = "b738822" }
+bmp388 = {git = "https://github.com/rland93/bmp388.git",  branch = "master",features=["config-builder"] }
 
 # io
-pwm-pca9685 = "0.3"
+pwm-pca9685 = "1.0"
 
 # Internal
-ollyfc_common = { path = "../ollyfc_common", features=["no_std"]}
-
+ollyfc_common = { path = "../ollyfc_common", features=["no_std"] }
 [profile.dev]
 codegen-units = 1
 debug = 2
