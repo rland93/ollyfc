@@ -46,7 +46,6 @@ mod app {
         let tim10 = dp.TIM10.delay_ms(&clocks);
 
         info!("pca 9865 test");
-        // b8 clock b9 data c3 enable
         let gpiob = dp.GPIOB.split();
         let gpioc = dp.GPIOC.split();
 
@@ -99,7 +98,7 @@ mod app {
         }
     }
 
-    #[task(shared=[tim10, pwm], local=[])]
+    #[task(shared=[tim10, pwm])]
     async fn servo_task(mut cx: servo_task::Context) {
         defmt::debug!("Servo task");
         let servo = Servo::new(209, 408);
