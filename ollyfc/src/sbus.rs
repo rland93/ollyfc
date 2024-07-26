@@ -108,25 +108,3 @@ fn parse_channels_from_raw(raw: [u8; 25]) -> [u16; 16] {
 
     channels
 }
-
-pub fn read_sbus_stream(cx: &mut crate::app::sbus_dma_stream::Context) {
-    cx.shared
-        .sbus_rx_transfer
-        .lock(|transfer: &mut crate::SbusInTransfer| {
-            if transfer.is_idle() {
-                // Allocate a new buffer
-                let new_buf = cx.local.sbus_rx_buffer.take().unwrap();
-                // Replace the new buffer with contents from the stream
-                let (buffer, _current) = transfer.next_transfer(new_buf).unwrap();
-
-                let rx_control: SbusChannels = SbusData::new(*buffer).parse();
-                let control: FlightControls = rx_control.get_input();
-                cx.shared.flight_controls.lock(|fc| {
-                    *fc = control;
-                });
-
-                // Free buffer
-                *cx.local.sbus_rx_buffer = Some(buffer);
-            }
-        });
-}
