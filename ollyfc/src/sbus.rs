@@ -1,6 +1,3 @@
-use rtic::Mutex;
-use stm32f4xx_hal::serial::RxISR;
-
 pub struct SbusData {
     raw: [u8; 25],
 }
