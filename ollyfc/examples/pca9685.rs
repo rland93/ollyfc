@@ -5,14 +5,13 @@
 
 use defmt::info;
 use defmt_rtt as _;
-use embedded_hdc1080_rs as hdc1080;
 use libm;
 use ollyfc::pwm::servo::Servo;
 use panic_probe as _;
 use pwm_pca9685::Channel;
 use rtic_monotonics::systick::Systick;
 use rtic_monotonics::Monotonic;
-use stm32f4xx_hal::{i2c::I2c1, pac::TIM10, pac::TIM9, prelude::*};
+use stm32f4xx_hal::{i2c::I2c1, pac::TIM10, prelude::*};
 
 use pwm_pca9685::Pca9685;
 
@@ -104,7 +103,7 @@ mod app {
         let servo = Servo::new(209, 408);
 
         loop {
-            for (i, j) in (0..180).step_by(1).zip(0..180).step_by(1) {
+            for (i, _) in (0..180).step_by(1).zip(0..180).step_by(1) {
                 let now = rtic_monotonics::systick::Systick::now();
 
                 let angle1 = i as f32;
@@ -113,7 +112,7 @@ mod app {
                 let angle2 = i as f32;
                 let (on2, off2) = servo.angle_to_counts(angle2);
 
-                if (i == 0) {
+                if i == 0 {
                     defmt::debug!("set");
                 }
 
