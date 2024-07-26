@@ -4,13 +4,15 @@
 use defmt_rtt as _;
 use panic_probe as _;
 
-use stm32f4xx_hal::{gpio, otg_fs, pac, prelude::*};
+use stm32f4xx_hal::{otg_fs, prelude::*};
 
 use usb_device::prelude::*;
 use usbd_serial::SerialPort;
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [USART1])]
 mod app {
+
+    use core::ptr::addr_of_mut;
 
     use rtic_monotonics::systick::Systick;
 
@@ -37,7 +39,6 @@ mod app {
         let clocks = rcc.cfgr.sysclk(48.MHz()).freeze();
 
         let gpioa = dp.GPIOA.split();
-        let gpioc = dp.GPIOC.split();
 
         // *** Begin USB setup ***
         let usb = otg_fs::USB {
@@ -50,19 +51,22 @@ mod app {
         };
 
         unsafe {
-            USB_BUS.replace(otg_fs::UsbBus::new(usb, &mut EP_MEMORY));
+            USB_BUS.replace(otg_fs::UsbBus::new(
+                usb,
+                addr_of_mut!(EP_MEMORY).as_mut().unwrap_unchecked(),
+            ));
         }
 
         let usb_serial = usbd_serial::SerialPort::new(unsafe { USB_BUS.as_ref().unwrap() });
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap() },
-            UsbVidPid(0x16c0, 0x27dd),
+            UsbVidPid(0x1209, 0x0117),
         )
         .device_class(usbd_serial::USB_CLASS_CDC)
         .strings(&[StringDescriptors::default()
-            .manufacturer("Fake Company")
-            .product("Product")
-            .serial_number("TEST")])
+            .manufacturer("rland93")
+            .product("ollyfc")
+            .serial_number("0")])
         .unwrap()
         .build();
 
