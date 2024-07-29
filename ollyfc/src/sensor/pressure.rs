@@ -13,7 +13,7 @@ use bmp388::Config;
 //  - RMS Noise: 11 cm
 //
 pub const BMP388_CFG: Config = Config {
-    address: bmp388::Addr::Primary as u8,
+    address: bmp388::Addr::Secondary as u8,
     oversampling: OversamplingConfig {
         osr_pressure: bmp388::Oversampling::x8,
         osr_temperature: bmp388::Oversampling::x1,
