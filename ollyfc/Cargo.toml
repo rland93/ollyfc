@@ -17,6 +17,8 @@ rtic = { version = "2.0.1", features = ["thumbv7-backend"] }
 rtic-monotonics = { version = "1.5", features = ["cortex-m-systick"] }
 rtic-monotonic = "1.0.0"
 
+static_assertions = "1.1.0"
+
 # Peripherals
 stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal.git", features = [
     "stm32f401",
@@ -25,7 +27,8 @@ stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal.git", feature
 ] }
 libm = "0.2.8"
 usbd-serial = { version = "0.2.0" }
-usb-device = { version = "0.3.1" }
+usb-device = { version = "0.3.2" }
+synopsys-usb-otg = "0.4.0"
 crc32fast = { version = "1.3", default-features = false }
 
 # Sensors
