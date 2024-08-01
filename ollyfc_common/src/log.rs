@@ -2,8 +2,10 @@
 use serde::{Deserialize, Serialize};
 
 pub const LOG_INFO_SIZE: usize = 24;
-#[cfg_attr(feature = "no_std", derive(defmt::Format))]
+pub const LOG_SIZE: usize = 64;
+
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "no_std", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogInfoPage {
     pub block_start_ptr: u32, // address of first block
@@ -45,7 +47,7 @@ impl LogInfoPage {
     }
 
     pub fn n_logs_in_region(&self) -> u32 {
-        self.n_blocks * self.block_size / crate::LOG_SIZE as u32
+        self.n_blocks * self.block_size / crate::log::LOG_SIZE as u32
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {

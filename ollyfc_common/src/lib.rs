@@ -2,15 +2,19 @@
 
 pub mod cmd;
 pub mod log;
+pub mod msg;
+
+pub const USB_VID: u16 = 0x1209;
+pub const USB_PID: u16 = 0x1ABC;
 
 #[cfg(feature = "std")]
 use csv::Writer;
 #[cfg(feature = "std")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
+use std::boxed::Box;
+#[cfg(feature = "std")]
 use std::error::Error;
-
-pub const LOG_SIZE: usize = 64;
 
 #[cfg_attr(feature = "no_std", derive(defmt::Format))]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
@@ -99,8 +103,8 @@ pub struct FlightLogData {
 }
 
 impl FlightLogData {
-    pub fn to_bytes(&self) -> [u8; LOG_SIZE] {
-        let mut bytes = [0u8; LOG_SIZE];
+    pub fn to_bytes(&self) -> [u8; crate::log::LOG_SIZE] {
+        let mut bytes = [0u8; crate::log::LOG_SIZE];
 
         // timestamp
         bytes[0..4].copy_from_slice(&self.timestamp.to_be_bytes());
@@ -131,7 +135,7 @@ impl FlightLogData {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8; LOG_SIZE]) -> Self {
+    pub fn from_bytes(bytes: &[u8; crate::log::LOG_SIZE]) -> Self {
         let timestamp = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
 
         let sbus_input = SBusInput {
@@ -178,7 +182,9 @@ impl FlightLogData {
     }
 
     #[cfg(feature = "std")]
-    pub fn export_to_csv(flight_logs: &[FlightLogData]) -> Result<String, Box<dyn Error>> {
+    pub fn export_to_csv(
+        flight_logs: &[FlightLogData],
+    ) -> Result<std::string::String, std::boxed::Box<dyn std::error::Error>> {
         let mut wtr = Writer::from_writer(vec![]);
 
         for flight_log in flight_logs {

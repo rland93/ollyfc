@@ -1,8 +1,8 @@
-use ollyfc_common::cmd::Command;
-use static_assertions::const_assert;
+use ollyfc_common::msg::Message;
 
 use stm32f4xx_hal::otg_fs;
 
+use stm32f4xx_hal::pac::CRC;
 use usb_device::bus;
 use usb_device::bus::UsbBus;
 use usb_device::class_prelude;
@@ -13,83 +13,34 @@ use usb_device::Result;
 const VENDOR_ID: u16 = 0x16c0;
 const PRODUCT_ID: u16 = 0x27dd;
 
+use ollyfc_common::msg::Crc32;
 use stm32f4xx_hal::crc32;
 
-#[repr(C, packed)]
-#[derive(Clone, Copy)]
-struct Message {
-    // 64 bytes       // n   | total
-    command: Command, // 1   | 1
-    length: u8,       // 1   | 2
-    crc: u32,         // 4   | 6
-    data: [u8; 58],   // 58  | 64
+struct FirmwareCrc32 {
+    periph: crc32::Crc32,
 }
-const_assert!(core::mem::size_of::<Message>() <= 64);
 
-impl Message {
-    fn new(command: Command, data: &[u8], hasher: &mut crc32::Crc32) -> Self {
-        let mut msg = Message {
-            command,
-            length: data.len() as u8,
-            data: [0; 58],
-            crc: 0,
-        };
-        msg.data[..data.len()].copy_from_slice(data);
-        msg.update_crc(hasher);
-        msg
-    }
-
-    fn update_crc(&mut self, hasher: &mut crc32::Crc32) {
-        hasher.init(); // Reset the CRC state
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                self as *const _ as *const u8,
-                core::mem::size_of::<Self>() - 4,
-            )
-        };
-        self.crc = hasher.update_bytes(bytes);
-    }
-
-    fn verify_crc(&self, hasher: &mut crc32::Crc32) -> bool {
-        hasher.init(); // Reset the CRC state
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                self as *const _ as *const u8,
-                core::mem::size_of::<Self>() - 4,
-            )
-        };
-        let calculated_crc = hasher.update_bytes(bytes);
-        calculated_crc == self.crc
-    }
-
-    fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            core::slice::from_raw_parts(self as *const _ as *const u8, core::mem::size_of::<Self>())
+// wrapper type to get around orphan rule
+impl FirmwareCrc32 {
+    pub fn new(crc_periph: CRC) -> Self {
+        Self {
+            periph: crc32::Crc32::new(crc_periph),
         }
     }
+}
 
-    fn from_bytes(bytes: &[u8]) -> Self {
-        // TODO FIXME: assert here, error handling
-        assert!(bytes.len() >= core::mem::size_of::<Self>());
-        let mut msg = Self {
-            command: Command::default(),
-            length: 0,
-            data: [0; 58],
-            crc: 0,
-        };
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                &mut msg as *mut _ as *mut u8,
-                core::mem::size_of::<Self>(),
-            );
-        }
-        msg
+impl Crc32 for FirmwareCrc32 {
+    fn init(&mut self) {
+        self.periph.init();
+    }
+
+    fn update(&mut self, data: &[u8]) -> u32 {
+        self.periph.update_bytes(data)
     }
 }
 
 pub struct BulkTransferClass<'a, B: UsbBus> {
-    crc_hasher: crc32fast::Hasher,
+    hasher: FirmwareCrc32,
     interface: class_prelude::InterfaceNumber,
     read_ep: endpoint::EndpointOut<'a, B>,
     write_ep: endpoint::EndpointIn<'a, B>,
@@ -99,10 +50,14 @@ pub struct BulkTransferClass<'a, B: UsbBus> {
     write_pos: usize,
 }
 impl<B: UsbBus> BulkTransferClass<'_, B> {
-    pub fn new(alloc: &class_prelude::UsbBusAllocator<B>) -> BulkTransferClass<'_, B> {
-        let hasher = crc32fast::Hasher::new();
+    pub fn new(
+        alloc: &class_prelude::UsbBusAllocator<B>,
+        crc_periph: CRC,
+    ) -> BulkTransferClass<'_, B> {
+        // there can be only one.
+        let hasher = FirmwareCrc32::new(crc_periph);
         BulkTransferClass {
-            crc_hasher: hasher,
+            hasher: hasher,
             interface: alloc.interface(),
             read_ep: alloc.bulk(64),
             write_ep: alloc.bulk(64),
@@ -118,7 +73,7 @@ impl<B: UsbBus> BulkTransferClass<'_, B> {
         self.write_ep.write(bytes)
     }
 
-    pub fn read(&mut self, hasher: &mut crc32::Crc32) -> Option<Message> {
+    pub fn read(&mut self) -> Option<Message> {
         // haven't gotten all data
         if self.read_pos < core::mem::size_of::<Message>() {
             match self.read_ep.read(&mut self.read_buffer[self.read_pos..]) {
@@ -132,7 +87,7 @@ impl<B: UsbBus> BulkTransferClass<'_, B> {
             // parse message
             let message = Message::from_bytes(&self.read_buffer[..core::mem::size_of::<Message>()]);
 
-            if message.verify_crc(hasher) {
+            if message.verify_crc(&mut self.hasher) {
                 self.read_pos = 0;
                 Some(message)
             } else {
@@ -143,6 +98,23 @@ impl<B: UsbBus> BulkTransferClass<'_, B> {
             // not enough data
             None
         }
+    }
+}
+
+impl<B: UsbBus> class_prelude::UsbClass<B> for BulkTransferClass<'_, B> {
+    fn get_configuration_descriptors(
+        &self,
+        writer: &mut usb_device::descriptor::DescriptorWriter,
+    ) -> Result<()> {
+        writer.interface(self.interface, 0xff, 0x00, 0x00)?;
+        writer.endpoint(&self.read_ep)?;
+        writer.endpoint(&self.write_ep)?;
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.read_pos = 0;
+        self.write_pos = 0;
     }
 }
 
@@ -160,9 +132,15 @@ impl FcDevice<'_, otg_fs::UsbBus<otg_fs::USB>> {
         usb: otg_fs::USB,
         USB_BUS: &'static mut Option<bus::UsbBusAllocator<otg_fs::UsbBus<otg_fs::USB>>>,
         EP_MEMORY: &'static mut [u32; 1024],
+        crc_periph: CRC,
     ) -> Self {
         USB_BUS.replace(otg_fs::UsbBus::new(usb, EP_MEMORY));
         let usb_bus = USB_BUS.as_ref().unwrap();
+
+        // Create BulkTransferClass first
+        let bulk_transfer = BulkTransferClass::new(usb_bus, crc_periph);
+
+        // Then create UsbDevice
         let usb_dev =
             device::UsbDeviceBuilder::new(usb_bus, device::UsbVidPid(VENDOR_ID, PRODUCT_ID))
                 .device_class(0xFF)
@@ -172,10 +150,26 @@ impl FcDevice<'_, otg_fs::UsbBus<otg_fs::USB>> {
                     .serial_number("01")])
                 .unwrap()
                 .build();
-        let bulk_transfer = BulkTransferClass::new(usb_bus);
+
         Self {
             usb_dev,
             bulk_transfer,
         }
+    }
+
+    pub fn poll(&mut self) -> bool {
+        self.usb_dev.poll(&mut [&mut self.bulk_transfer])
+    }
+
+    pub fn state(&self) -> device::UsbDeviceState {
+        self.usb_dev.state()
+    }
+
+    pub fn send_msg(&mut self, message: &Message) -> Result<usize> {
+        self.bulk_transfer.write(message)
+    }
+
+    pub fn recv_msg(&mut self) -> Option<Message> {
+        self.bulk_transfer.read()
     }
 }

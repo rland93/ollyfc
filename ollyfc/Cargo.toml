@@ -46,6 +46,7 @@ w25q = { git = "https://github.com/rland93/w25q-rs.git", branch = "main", featur
 embedded-io = "0.6.1"
 pwm-pca9685 = "1.0"
 # Internal
+
 ollyfc_common = { path = "../ollyfc_common", features = ["no_std"] }
 
 [profile.dev]

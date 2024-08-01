@@ -10,7 +10,7 @@ pub const BAUD_RATE: usize = 115200;
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum Command {
-    Default,
+    Default,             // default command
     Acknowledge,         // acknowledge
     GetFlashDataInfo,    // get flash data info
     GetLogData,          // get flash data

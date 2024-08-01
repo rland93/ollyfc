@@ -4,24 +4,21 @@
 use defmt_rtt as _;
 use panic_probe as _;
 
-use stm32f4xx_hal::{otg_fs, prelude::*};
-
-use usb_device::prelude::*;
-use usbd_serial::SerialPort;
+use defmt::info;
+use ollyfc::usb::protocol::FcDevice;
+use stm32f4xx_hal::{gpio, otg_fs, prelude::*};
 
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [USART1])]
 mod app {
 
-    use core::ptr::addr_of_mut;
-
     use rtic_monotonics::systick::Systick;
+    use usb_device::device;
 
     use super::*;
 
     #[shared]
     struct Shared {
-        usb_dev: UsbDevice<'static, otg_fs::UsbBusType>,
-        usb_serial: SerialPort<'static, otg_fs::UsbBusType>,
+        fc_dev: FcDevice<'static, otg_fs::UsbBus<otg_fs::USB>>,
     }
 
     #[local]
@@ -40,68 +37,64 @@ mod app {
 
         let gpioa = dp.GPIOA.split();
 
-        // *** Begin USB setup ***
-        let usb = otg_fs::USB {
+        let usb_pin_dm = gpioa.pa11.into_alternate();
+        let usb_pin_dp = gpioa.pa12.into_alternate();
+        let usb_dev = otg_fs::USB {
             usb_global: dp.OTG_FS_GLOBAL,
             usb_device: dp.OTG_FS_DEVICE,
             usb_pwrclk: dp.OTG_FS_PWRCLK,
-            pin_dm: gpioa.pa11.into(),
-            pin_dp: gpioa.pa12.into(),
+            pin_dm: gpio::alt::otg_fs::Dm::PA11(usb_pin_dm),
+            pin_dp: gpio::alt::otg_fs::Dp::PA12(usb_pin_dp),
             hclk: clocks.hclk(),
         };
 
-        unsafe {
-            USB_BUS.replace(otg_fs::UsbBus::new(
-                usb,
-                addr_of_mut!(EP_MEMORY).as_mut().unwrap_unchecked(),
-            ));
-        }
+        let fc_dev = FcDevice::new(
+            usb_dev,
+            unsafe { &mut USB_BUS },
+            unsafe { &mut EP_MEMORY },
+            dp.CRC,
+        );
 
-        let usb_serial = usbd_serial::SerialPort::new(unsafe { USB_BUS.as_ref().unwrap() });
-        let usb_dev = UsbDeviceBuilder::new(
-            unsafe { USB_BUS.as_ref().unwrap() },
-            UsbVidPid(0x1209, 0x0117),
-        )
-        .device_class(usbd_serial::USB_CLASS_CDC)
-        .strings(&[StringDescriptors::default()
-            .manufacturer("rland93")
-            .product("ollyfc")
-            .serial_number("0")])
-        .unwrap()
-        .build();
-
-        (
-            Shared {
-                usb_dev,
-                usb_serial,
-            },
-            Local {},
-        )
+        (Shared { fc_dev: fc_dev }, Local {})
     }
 
-    #[task(binds=OTG_FS, shared=[usb_dev, usb_serial])]
-    fn usb_fs(cx: usb_fs::Context) {
-        (cx.shared.usb_dev, cx.shared.usb_serial).lock(|usb_dev, usb_serial| {
-            if usb_dev.poll(&mut [usb_serial]) {
-                let mut buf = [0u8; 64];
+    #[task(binds=OTG_FS, shared=[fc_dev])]
+    fn usb_fs(mut cx: usb_fs::Context) {
+        cx.shared.fc_dev.lock(|dev| {
+            let poll = dev.poll();
+            if !poll {
+                return;
+            }
 
-                match usb_serial.read(&mut buf) {
-                    Ok(count) if count > 0 => {
-                        let mut write_offset = 0;
-                        while write_offset < count {
-                            match usb_serial.write(&mut buf[write_offset..count]) {
-                                Ok(len) if len > 0 => {
-                                    write_offset += len;
-                                }
-                                _ => {}
-                            }
-                        }
-                        // print char
-                        defmt::info!("{}", core::str::from_utf8(&buf[..count]).unwrap());
-                    }
-                    _ => {}
+            match dev.state() {
+                device::UsbDeviceState::Default => {
+                    info!("USB Default");
+                    // Device has just been connected or reset
+                    // Initialize device here if needed
+                }
+                device::UsbDeviceState::Addressed => {
+                    info!("USB Addressed");
+                    // Device has been assigned an address
+                    // Set configuration here if needed
+                }
+                device::UsbDeviceState::Configured => {
+                    info!("USB Configured");
+                    // Device is connected and configured
+                    // Handle incoming data here
+                }
+                device::UsbDeviceState::Suspend => {
+                    info!("USB Suspend");
+                    // Device has been disconnected
+                    // Handle disconnection here
                 }
             }
         });
+
+        // Clear interrupt
+    }
+
+    #[task(shared=[fc_dev])]
+    async fn handle_incoming_msg(mut cx: handle_incoming_msg::Context) {
+        cx.shared.fc_dev.lock(|dev| {});
     }
 }
