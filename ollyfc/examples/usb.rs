@@ -11,7 +11,7 @@ use stm32f4xx_hal::{gpio, otg_fs, prelude::*};
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [USART1])]
 mod app {
 
-    use rtic_monotonics::systick::Systick;
+    use rtic_monotonics::{systick::Systick, Monotonic};
     use usb_device::device;
 
     use super::*;
@@ -48,53 +48,51 @@ mod app {
             hclk: clocks.hclk(),
         };
 
-        let fc_dev = FcDevice::new(
-            usb_dev,
-            unsafe { &mut USB_BUS },
-            unsafe { &mut EP_MEMORY },
-            dp.CRC,
-        );
+        #[allow(static_mut_refs)]
+        let fc_dev = FcDevice::new(usb_dev, unsafe { &mut USB_BUS }, unsafe { &mut EP_MEMORY });
 
-        (Shared { fc_dev: fc_dev }, Local {})
+        (Shared { fc_dev }, Local {})
     }
 
-    #[task(binds=OTG_FS, shared=[fc_dev])]
+    #[task(binds=OTG_FS, shared=[fc_dev], local=[poll_count: u32 = 0])]
     fn usb_fs(mut cx: usb_fs::Context) {
         cx.shared.fc_dev.lock(|dev| {
-            let poll = dev.poll();
-            if !poll {
-                return;
+            *cx.local.poll_count += 1;
+            if *cx.local.poll_count % 1000 == 0 {
+                defmt::debug!("USB interrupt fired {} times", *cx.local.poll_count);
             }
 
-            match dev.state() {
-                device::UsbDeviceState::Default => {
-                    info!("USB Default");
-                    // Device has just been connected or reset
-                    // Initialize device here if needed
-                }
-                device::UsbDeviceState::Addressed => {
-                    info!("USB Addressed");
-                    // Device has been assigned an address
-                    // Set configuration here if needed
-                }
-                device::UsbDeviceState::Configured => {
-                    info!("USB Configured");
-                    // Device is connected and configured
-                    // Handle incoming data here
-                }
-                device::UsbDeviceState::Suspend => {
-                    info!("USB Suspend");
-                    // Device has been disconnected
-                    // Handle disconnection here
-                }
+            let poll_result = dev.poll();
+            let current_state = dev.state();
+
+            defmt::debug!(
+                "USB State: {:?}, Poll result: {}",
+                match current_state {
+                    device::UsbDeviceState::Default => "Default",
+                    device::UsbDeviceState::Addressed => "Addressed",
+                    device::UsbDeviceState::Configured => "Configured",
+                    device::UsbDeviceState::Suspend => "Suspend",
+                },
+                poll_result
+            );
+
+            if poll_result {
+                defmt::debug!("USB device polled successfully in interrupt");
+                // Additional processing if needed
             }
         });
-
-        // Clear interrupt
     }
 
     #[task(shared=[fc_dev])]
     async fn handle_incoming_msg(mut cx: handle_incoming_msg::Context) {
-        cx.shared.fc_dev.lock(|dev| {});
+        info!("Handling incoming messages task spawned.");
+
+        cx.shared.fc_dev.lock(|dev| {
+            if dev.poll() {
+                while let Some(msg) = dev.recv_msg() {
+                    defmt::info!("Received message: {:?}", msg.as_bytes());
+                }
+            }
+        });
     }
 }
