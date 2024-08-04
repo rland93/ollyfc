@@ -4,7 +4,6 @@
 
 use bmi088::{Bmi088, IntConfiguration};
 use core::convert::Infallible;
-use core::ptr::addr_of;
 use defmt_rtt as _;
 use embedded_hal_bus::spi::{AtomicDevice, AtomicError, DeviceError, NoDelay};
 use embedded_hal_bus::util::AtomicCell;
@@ -34,7 +33,6 @@ mod app {
     struct Shared {
         accel: Bmi088<SpiInterface<AccelDev>>,
         gyro: Bmi088<SpiInterface<GyroDev>>,
-        _spi3bus: &'static Option<Spi3Bus>,
     }
 
     #[local]
@@ -101,7 +99,6 @@ mod app {
 
         (
             Shared {
-                _spi3bus: unsafe { addr_of!(SPI3BUS).as_ref().unwrap() },
                 accel: accel_dev,
                 gyro: gyro_dev,
             },
@@ -131,6 +128,7 @@ mod app {
         });
     }
 
+    // Task to read data from the IMU
     #[task(shared=[accel, gyro])]
     async fn read_imu(cx: read_imu::Context) {
         let mut acc = cx.shared.accel;
