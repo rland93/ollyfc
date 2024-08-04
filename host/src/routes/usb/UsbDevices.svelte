@@ -56,6 +56,7 @@
                     class:contrast={device.is_compatible &&
                         !(selectedDevice?.port_number === device.port_number)}
                     class:secondary={!device.is_compatible}
+                    class:compatible={device.is_compatible}
                     on:click={() => selectDevice(device.port_number)}
                 >
                     <span class="name">{device.name}</span>
@@ -83,5 +84,8 @@
         display: flex;
         flex-direction: column;
         gap: var(--pico-spacing);
+    }
+    button.compatible {
+        border-width: 3px;
     }
 </style>
