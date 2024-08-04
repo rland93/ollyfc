@@ -13,9 +13,9 @@ pub struct BulkTransferClass<'a, B: UsbBus> {
     read_ep: endpoint::EndpointOut<'a, B>,
     write_ep: endpoint::EndpointIn<'a, B>,
     read_buffer: [u8; MAX_MSG_SIZE],
-    write_buffer: [u8; MAX_MSG_SIZE],
+    _write_buffer: [u8; MAX_MSG_SIZE],
     read_pos: usize,
-    write_pos: usize,
+    _write_pos: usize,
 }
 
 impl<B: UsbBus> BulkTransferClass<'_, B> {
@@ -25,9 +25,9 @@ impl<B: UsbBus> BulkTransferClass<'_, B> {
             read_ep: alloc.bulk(64),
             write_ep: alloc.bulk(64),
             read_buffer: [0; MAX_MSG_SIZE],
-            write_buffer: [0; MAX_MSG_SIZE],
+            _write_buffer: [0; MAX_MSG_SIZE],
             read_pos: 0,
-            write_pos: 0,
+            _write_pos: 0,
         }
     }
 
