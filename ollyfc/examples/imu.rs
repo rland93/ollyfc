@@ -42,13 +42,20 @@ mod app {
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local) {
-        // Setup clocks
         let mut dp = cx.device;
-        let mut syscfg = dp.SYSCFG.constrain();
         let rcc = dp.RCC.constrain();
+        let hse = 12.MHz();
+        let sysclk = 64.MHz();
+        let clocks = rcc
+            .cfgr
+            .use_hse(hse)
+            .sysclk(sysclk)
+            .require_pll48clk()
+            .freeze();
+
+        let mut syscfg = dp.SYSCFG.constrain();
         let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, 64_000_000, systick_mono_token);
-        let clocks = rcc.cfgr.sysclk(64.MHz()).freeze();
+        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
 
         let gpiob = dp.GPIOB.split();
         let gpioc = dp.GPIOC.split();

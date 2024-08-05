@@ -38,7 +38,7 @@ mod app {
     fn init(cx: init::Context) -> (Shared, Local) {
         let dp = cx.device;
         let rcc = dp.RCC.constrain();
-        let hse = 25.MHz();
+        let hse = 12.MHz();
         let sysclk = 64.MHz();
         let clocks = rcc
             .cfgr
@@ -47,9 +47,9 @@ mod app {
             .require_pll48clk()
             .freeze();
 
-        let mut _syscfg = dp.SYSCFG.constrain();
+        let _syscfg = dp.SYSCFG.constrain();
         let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, 64_000_000, systick_mono_token);
+        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
 
         let gpioa = dp.GPIOA.split();
         let delay = dp.TIM2.delay_ms(&clocks);

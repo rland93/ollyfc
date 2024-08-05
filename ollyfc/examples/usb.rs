@@ -31,9 +31,18 @@ mod app {
 
         let dp = cx.device;
         let rcc = dp.RCC.constrain();
+        let hse = 12.MHz();
+        let sysclk = 64.MHz();
+        let clocks = rcc
+            .cfgr
+            .use_hse(hse)
+            .sysclk(sysclk)
+            .require_pll48clk()
+            .freeze();
+
+        let _syscfg = dp.SYSCFG.constrain();
         let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, 48_000_000, systick_mono_token);
-        let clocks = rcc.cfgr.sysclk(48.MHz()).freeze();
+        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
 
         let gpioa = dp.GPIOA.split();
 
