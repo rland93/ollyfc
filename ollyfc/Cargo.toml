@@ -20,11 +20,13 @@ rtic-monotonic = "1.0.0"
 static_assertions = "1.1.0"
 
 # Peripherals
-stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal.git", features = [
+stm32f4xx-hal = { version = "0.20.0", features = [
     "stm32f401",
     "usb_fs",
     "rtic2",
+    "defmt",
 ] }
+
 libm = "0.2.8"
 usbd-serial = { version = "0.2.0" }
 usb-device = { version = "0.3.2" }
@@ -42,12 +44,19 @@ w25q = { git = "https://github.com/rland93/w25q-rs.git", branch = "main", featur
     "defmt",
 ] }
 
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+
 # io
 embedded-io = "0.6.1"
 pwm-pca9685 = "1.0"
 # Internal
 
 ollyfc_common = { path = "../ollyfc_common", features = ["no_std"] }
+
+[dev-dependencies]
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.3"
+rtt-target = { version = "0.5.0" }
 
 [profile.dev]
 codegen-units = 1
