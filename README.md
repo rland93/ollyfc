@@ -9,10 +9,10 @@ Board bring-up progress:
 - [x] PCA9865 PWM Controller
 - [x] Servo Channels from 5v power rail
 - [x] FrSky SBUS External Reciever
-- [ ] BMP388 Pressure Sensor
-- [ ] LIS3MDL Magnetometer
-- [ ] FrSky SBUS 
+- [x] BMP388 Pressure Sensor
+- [x] LIS3MDL Magnetometer
+- [x] FrSky SBUS 
 - [ ] U-blox NEO m8n GPS unit
 - [ ] NPA 730B differential pressure sensor
-- [ ] W25Q External Flash Memory
+- [x] W25Q External Flash Memory
 - [ ] UART for holybro 915MHz telemetry radio
