@@ -15,12 +15,15 @@
 use defmt_rtt as _;
 use panic_probe as _;
 
+use rtic_monotonics::systick_monotonic;
+systick_monotonic!(Mono, 1000);
+
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [TIM2])]
 mod app {
+    use super::*;
     use hal::{dma, pac, prelude::*, serial};
 
-    use ollyfc::sbus::SbusData;
-    use rtic_monotonics::systick::Systick;
+    use ollyfc::io::sbus::SbusData;
     use stm32f4xx_hal as hal;
     const BUFFER_SIZE: usize = 25;
     type RxTransfer = dma::Transfer<
@@ -55,8 +58,7 @@ mod app {
             .freeze();
 
         let _syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         let gpiob = dp.GPIOB.split();
 
@@ -112,13 +114,19 @@ mod app {
                 let chan_data = SbusData::new(*buf).parse();
                 // free the buffer
                 cx.local.sbus_buffer.replace(buf);
-                chan_task::spawn(chan_data);
+                match chan_task::spawn(chan_data) {
+                    Ok(_) => (),
+                    Err(e) => {
+                        defmt::error!("Error spawning task: {:?}", e);
+                        panic!();
+                    }
+                };
             }
         });
     }
 
     #[task()]
-    async fn chan_task(_cx: chan_task::Context, chan_data: ollyfc::sbus::SbusChannels) {
+    async fn chan_task(_cx: chan_task::Context, chan_data: ollyfc::io::sbus::SbusChannels) {
         let inputs = chan_data.get_input();
 
         defmt::info!(

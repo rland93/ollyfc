@@ -4,6 +4,11 @@ pub struct Servo {
     max_pulse_width: u16,
 }
 
+pub struct ServoPwmOut {
+    pub on: u16,
+    pub off: u16,
+}
+
 impl Servo {
     /// Creates a new `Servo` instance.
     ///
@@ -26,18 +31,18 @@ impl Servo {
     /// # Returns
     /// - Tuple of on and off pulse width counts.
     ///
-    pub fn angle_to_counts(&self, angle: f32) -> (u16, u16) {
-        if angle < 0.0 || angle > 180.0 {
-            panic!("Angle must be between 0 and 180 degrees");
-        }
-
+    pub fn angle_to_counts(&self, angle: f32) -> ServoPwmOut {
+        let angle = angle % 180.0;
         let scaled_angle = angle / 180.0;
         let pulse_range = self.max_pulse_width - self.min_pulse_width;
         let pulse_width = pulse_range as f32 * scaled_angle;
         let pulse_width = (pulse_width + self.min_pulse_width as f32) as u16;
-        let on = 0;
-        let off = on + pulse_width;
+        let on_count = 0;
+        let off_count = on_count + pulse_width;
 
-        (on, off)
+        ServoPwmOut {
+            on: on_count,
+            off: off_count,
+        }
     }
 }

@@ -9,8 +9,9 @@ use libm;
 use ollyfc::pwm::servo::Servo;
 use panic_probe as _;
 use pwm_pca9685::Channel;
-use rtic_monotonics::systick::Systick;
+use rtic_monotonics::systick_monotonic;
 use rtic_monotonics::Monotonic;
+systick_monotonic!(Mono, 1000);
 use stm32f4xx_hal::{i2c::I2c1, pac::TIM10, prelude::*};
 
 use pwm_pca9685::Pca9685;
@@ -46,8 +47,7 @@ mod app {
             .freeze();
 
         let _syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         // delay
         let tim10 = dp.TIM10.delay_ms(&clocks);
@@ -84,7 +84,7 @@ mod app {
 
         loop {
             for i in (0..360).step_by(5) {
-                let now = rtic_monotonics::systick::Systick::now();
+                let now = Mono::now();
                 let rad = (i as f32) * PI / 180.0;
                 let sine_wave = match libm::sinf(rad) {
                     x if x > 0.0 => x,
@@ -100,7 +100,7 @@ mod app {
 
                 let delay = (step_size / frequency * 1000.0) as u32;
 
-                rtic_monotonics::systick::Systick::delay_until(now + delay.millis()).await;
+                Mono::delay_until(now + delay.millis()).await;
             }
         }
     }
@@ -112,24 +112,26 @@ mod app {
 
         loop {
             for (i, _) in (0..180).step_by(1).zip(0..180).step_by(1) {
-                let now = rtic_monotonics::systick::Systick::now();
+                let now = Mono::now();
 
                 let angle1 = i as f32;
-                let (on1, off1) = servo.angle_to_counts(angle1);
+                let counts1 = servo.angle_to_counts(angle1);
 
                 let angle2 = i as f32;
-                let (on2, off2) = servo.angle_to_counts(angle2);
+                let counts2 = servo.angle_to_counts(angle2);
 
                 if i == 0 {
                     defmt::debug!("set");
                 }
 
                 cx.shared.pwm.lock(|pwm| {
-                    pwm.set_channel_on_off(Channel::C1, on1, off1).unwrap();
-                    pwm.set_channel_on_off(Channel::C2, on2, off2).unwrap();
+                    pwm.set_channel_on_off(Channel::C1, counts1.on, counts1.off)
+                        .unwrap();
+                    pwm.set_channel_on_off(Channel::C2, counts2.on, counts2.off)
+                        .unwrap();
                 });
 
-                rtic_monotonics::systick::Systick::delay_until(now + 25u32.millis()).await;
+                Mono::delay_until(now + 25u32.millis()).await;
             }
         }
     }

@@ -6,8 +6,10 @@ use panic_probe as _;
 
 use bmp388::{Blocking, BMP388};
 use num_traits::Pow;
-use ollyfc::sensor::pressure::BMP388_CFG;
-use rtic_monotonics::{systick::Systick, Monotonic};
+use rtic_monotonics::systick_monotonic;
+use rtic_monotonics::Monotonic;
+systick_monotonic!(Mono, 1000);
+
 use stm32f4xx_hal::prelude::*;
 use stm32f4xx_hal::{i2c, pac};
 
@@ -38,8 +40,7 @@ mod app {
             .freeze();
 
         let _syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         let gpioa = dp.GPIOA.split();
         let gpioc = dp.GPIOC.split();
@@ -49,9 +50,17 @@ mod app {
         let i2c3 = i2c::I2c::new(dp.I2C3, (scl, sda), i2c::Mode::standard(400.kHz()), &clocks);
 
         let mut delay = dp.TIM2.delay_ms(&clocks);
-        let cfg = BMP388_CFG;
-        defmt::info!("cfg address={:x}", cfg.address);
-        let sensor = cfg.setup_blocking(i2c3, &mut delay).unwrap();
+        let sensor = bmp388::Config::builder()
+            .address(bmp388::Addr::Secondary as u8)
+            .oversampling(bmp388::config::OversamplingConfig {
+                osr_pressure: bmp388::Oversampling::x4,
+                osr_temperature: bmp388::Oversampling::x4,
+            })
+            .sampling_rate(bmp388::SamplingRate::ms5)
+            .build()
+            .setup_blocking(i2c3, &mut delay)
+            .unwrap();
+        defmt::info!("cfg address={:x}", bmp388::Addr::Secondary as u8);
 
         read_sensor::spawn().unwrap();
 
@@ -62,7 +71,7 @@ mod app {
     async fn read_sensor(cx: read_sensor::Context) {
         let sensor = cx.local.sensor;
         loop {
-            let now = rtic_monotonics::systick::Systick::now();
+            let now = Mono::now();
             let data = sensor.sensor_values().unwrap();
             defmt::info!(
                 "Altitude: {} m {} Pa {} C",
@@ -71,7 +80,7 @@ mod app {
                 data.temperature
             );
 
-            rtic_monotonics::systick::Systick::delay_until(now + 20u32.millis()).await;
+            Mono::delay_until(now + 20u32.millis()).await;
         }
     }
 }

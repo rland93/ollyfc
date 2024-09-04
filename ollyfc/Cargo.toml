@@ -14,7 +14,7 @@ embedded-hal = "1"
 embedded-hal-bus = "0.2"
 
 rtic = { version = "2.0.1", features = ["thumbv7-backend"] }
-rtic-monotonics = { version = "1.5", features = ["cortex-m-systick"] }
+rtic-monotonics = { version = "2.0", features = ["cortex-m-systick"] }
 rtic-monotonic = "1.0.0"
 
 static_assertions = "1.1.0"

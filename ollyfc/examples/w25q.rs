@@ -11,14 +11,18 @@ use stm32f4xx_hal::{pac, prelude::*, spi};
 use defmt_rtt as _;
 use panic_probe as _;
 
+use rtic_monotonics::systick_monotonic;
+use rtic_monotonics::Monotonic;
+systick_monotonic!(Mono, 1000);
+
+use embedded_io::{Read, Seek, SeekFrom, Write};
+use stm32f4xx_hal::timer::Delay;
+
 #[rtic::app(device = stm32f4xx_hal::pac)]
 mod app {
 
-    use embedded_io::{Read, Seek, SeekFrom, Write};
-    use rtic_monotonics::{systick::Systick, Monotonic};
-    use stm32f4xx_hal::timer::Delay;
-
     use super::*;
+
     #[shared]
     struct Shared {}
 
@@ -48,8 +52,7 @@ mod app {
             .freeze();
 
         let _syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         let gpioa = dp.GPIOA.split();
         let delay = dp.TIM2.delay_ms(&clocks);
@@ -84,7 +87,7 @@ mod app {
     async fn mem_test(cx: mem_test::Context) {
         let w25q_dev = cx.local.w25q_dev;
         loop {
-            let now = rtic_monotonics::systick::Systick::now();
+            let now = Mono::now();
 
             info!("test starts...");
 
@@ -120,7 +123,7 @@ mod app {
             debug!("read {} bytes", bytes_read);
             debug!("read: {:?}", buf[0..4]);
 
-            rtic_monotonics::systick::Systick::delay_until(now + 5000u32.millis()).await;
+            Mono::delay_until(now + 5000u32.millis()).await;
         }
     }
 }

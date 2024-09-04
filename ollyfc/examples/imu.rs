@@ -1,48 +1,51 @@
 #![no_main]
 #![no_std]
 #![feature(type_alias_impl_trait)]
-
-use bmi088::{Bmi088, IntConfiguration};
-use core::convert::Infallible;
+/// In this example, we configure the BMI088 IMU to store readings in the FIFO.
+/// We poll the FIFO to read out new readings in bulk.
+///
 use defmt_rtt as _;
-use embedded_hal_bus::spi::{AtomicDevice, AtomicError, DeviceError, NoDelay};
-use embedded_hal_bus::util::AtomicCell;
+use embedded_hal_bus as ebus;
 use panic_probe as _;
-use rtic_monotonics::systick::Systick;
-use stm32f4xx_hal::{
-    gpio, pac,
-    prelude::*,
-    spi,
-    spi::{Mode, Phase, Polarity, Spi, Spi3},
-};
+use stm32f4xx_hal::{gpio, pac, prelude::*, spi};
 
-type GyroDev = AtomicDevice<'static, Spi<pac::SPI3>, gpio::Pin<'B', 5, gpio::Output>, NoDelay>;
-type AccelDev = AtomicDevice<'static, Spi<pac::SPI3>, gpio::Pin<'D', 2, gpio::Output>, NoDelay>;
-type Spi3Bus = AtomicCell<Spi<pac::SPI3>>;
-type SpiBusErr = AtomicError<DeviceError<spi::Error, Infallible>>;
-
-use bmi088::{interface::SpiInterface, PinActive};
+type GyroDev = ebus::spi::AtomicDevice<
+    'static,
+    spi::Spi<pac::SPI3>,
+    gpio::Pin<'B', 5, gpio::Output>,
+    ebus::spi::NoDelay,
+>;
+type AccelDev = ebus::spi::AtomicDevice<
+    'static,
+    spi::Spi<pac::SPI3>,
+    gpio::Pin<'D', 2, gpio::Output>,
+    ebus::spi::NoDelay,
+>;
+type Spi3Bus = ebus::util::AtomicCell<spi::Spi<pac::SPI3>>;
 static mut SPI3BUS: Option<Spi3Bus> = None;
 
-#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
+use rtic_monotonics::{systick_monotonic, Monotonic};
+systick_monotonic!(Mono, 1000);
+
+use bmi088::Bmi088;
+
+#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [EXTI1])]
 mod app {
 
     use super::*;
 
     #[shared]
     struct Shared {
-        accel: Bmi088<SpiInterface<AccelDev>>,
-        gyro: Bmi088<SpiInterface<GyroDev>>,
+        dev_accel: Bmi088<bmi088::interface::SpiInterface<AccelDev>>,
+        dev_gyro: Bmi088<bmi088::interface::SpiInterface<GyroDev>>,
     }
 
     #[local]
-    struct Local {
-        imu_drdy: gpio::Pin<'C', 0, gpio::Input>,
-    }
+    struct Local {}
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local) {
-        let mut dp = cx.device;
+        let dp = cx.device;
         let rcc = dp.RCC.constrain();
         let hse = 12.MHz();
         let sysclk = 64.MHz();
@@ -53,209 +56,158 @@ mod app {
             .require_pll48clk()
             .freeze();
 
-        let mut syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         let gpiob = dp.GPIOB.split();
         let gpioc = dp.GPIOC.split();
         let gpiod = dp.GPIOD.split();
 
-        let spi: Spi3 = Spi3::new(
+        defmt::debug!("spi setup");
+        let dev_spi: spi::Spi3 = spi::Spi3::new(
             dp.SPI3,
             (
                 gpioc.pc10.into_alternate(),
                 gpioc.pc11.into_alternate(),
                 gpioc.pc12.into_alternate(),
             ),
-            Mode {
-                polarity: Polarity::IdleLow,
-                phase: Phase::CaptureOnFirstTransition,
+            spi::Mode {
+                polarity: spi::Polarity::IdleLow,
+                phase: spi::Phase::CaptureOnFirstTransition,
             },
             8.MHz(),
             &clocks,
         );
-
         let mut acc_cs = gpiod.pd2.into_push_pull_output();
         let mut gyr_cs = gpiob.pb5.into_push_pull_output();
         acc_cs.set_high();
         gyr_cs.set_high();
 
-        let (mut accel_dev, mut gyro_dev) = unsafe {
-            SPI3BUS = Some(AtomicCell::new(spi));
-            let bus = SPI3BUS.as_ref().unwrap();
-            let acc = AtomicDevice::new_no_delay(&bus, acc_cs).unwrap();
-            let gyro = AtomicDevice::new_no_delay(&bus, gyr_cs).unwrap();
-            (Bmi088::new_with_spi(acc), Bmi088::new_with_spi(gyro))
+        let bus = unsafe {
+            SPI3BUS = Some(ebus::util::AtomicCell::new(dev_spi));
+            SPI3BUS.as_ref().unwrap()
         };
-        // do dummy chipid read for both sensors
-        accel_dev.acc_chipid().unwrap();
-        gyro_dev.gyro_chipid().unwrap();
 
-        let mut imu_drdy = gpioc.pc0.into_pull_up_input();
-        imu_drdy.make_interrupt_source(&mut syscfg);
-        imu_drdy.trigger_on_edge(&mut dp.EXTI, gpio::Edge::Falling);
-        imu_drdy.enable_interrupt(&mut dp.EXTI);
-        unsafe {
-            pac::NVIC::unmask(imu_drdy.interrupt());
-        }
+        let mut dev_accel =
+            Bmi088::new_with_spi(ebus::spi::AtomicDevice::new_no_delay(&bus, acc_cs).unwrap());
+        let mut dev_gyro =
+            Bmi088::new_with_spi(ebus::spi::AtomicDevice::new_no_delay(&bus, gyr_cs).unwrap());
 
-        imu_config::spawn().unwrap();
+        defmt::info!(
+            "accel: {:x}, gyro: {:x}",
+            dev_accel.acc_chip_id_read().unwrap(),
+            dev_gyro.gyro_chip_id_read().unwrap()
+        );
+
+        // configure
+        let config = bmi088::AccConfiguration::builder()
+            .acc_power_conf(bmi088::AccPowerConf::Active)
+            .acc_power_ctrl(bmi088::AccPowerCtrl::On)
+            .acc_bandwidth((bmi088::AccBandwidth::X4, bmi088::AccDataRate::Hz400))
+            .acc_range(bmi088::AccRange::G3)
+            // stream mode - discards old data from the queue
+            .acc_fifo_mode(bmi088::AccFifoMode::Stream)
+            // enable fifo
+            .acc_fifo_conf1(bmi088::AccFifoConfig1 {
+                acc_en: true,
+                int1_input_en: false,
+                int2_input_en: false,
+            })
+            // no downsampling
+            .acc_fifo_downs(0)
+            .build();
+
+        dev_accel.configure_accelerometer(config).unwrap();
+
+        let mode = dev_accel.acc_conf_read().unwrap();
+        defmt::debug!("mode CONF: {:?}", defmt::Debug2Format(&mode));
+        let fifoconfig1 = dev_accel.acc_fifo_config1_read().unwrap();
+        defmt::debug!("config1 CONF: {:?}", defmt::Debug2Format(&fifoconfig1));
+        let downs = dev_accel.acc_fifo_downs_read().unwrap();
+        defmt::debug!("downs CONF: {:?}", defmt::Debug2Format(&downs));
+        let fifomode = dev_accel.acc_fifo_mode_read().unwrap();
+        defmt::debug!("config0 CONF: {:?}", defmt::Debug2Format(&fifomode));
+        let wtm = dev_accel.acc_fifo_wtm_read().unwrap();
+        defmt::debug!("wtm CONF: {:?}", defmt::Debug2Format(&wtm));
+        let int1 = dev_accel.acc_int1_io_ctrl_read().unwrap();
+        defmt::debug!("int1 CONF: {:?}", defmt::Debug2Format(&int1));
+        let int2 = dev_accel.acc_int2_io_ctrl_read().unwrap();
+        defmt::debug!("int2 CONF: {:?}", defmt::Debug2Format(&int2));
+        let int_map = dev_accel.acc_int1_int2_map_data_read().unwrap();
+        defmt::debug!("int_map CONF: {:?}", defmt::Debug2Format(&int_map));
+        let pwr_conf = dev_accel.acc_pwr_conf_read().unwrap();
+        defmt::debug!("pwr_conf CONF: {:?}", defmt::Debug2Format(&pwr_conf));
+        let pwr_ctrl = dev_accel.acc_pwr_ctrl_read().unwrap();
+        defmt::debug!("pwr_ctrl CONF: {:?}", defmt::Debug2Format(&pwr_ctrl));
+        let range = dev_accel.acc_range_read().unwrap();
+        defmt::debug!("range CONF: {:?}", defmt::Debug2Format(&range));
 
         defmt::info!("setup done");
 
+        sensor_process::spawn().ok();
+
         (
             Shared {
-                accel: accel_dev,
-                gyro: gyro_dev,
+                dev_accel,
+                dev_gyro,
             },
-            Local { imu_drdy },
+            Local {},
         )
     }
 
-    // Interrupt
-    #[task(binds = EXTI0, local = [imu_drdy])]
-    fn imu_drdy(cx: imu_drdy::Context) {
-        cx.local.imu_drdy.clear_interrupt_pending_bit();
-        read_imu::spawn().unwrap();
+    // polling task to read out the FIFO.
+    #[task(priority=1, shared=[dev_accel, dev_gyro])]
+    async fn sensor_process(mut cx: sensor_process::Context) {
+        loop {
+            let now = Mono::now();
+
+            // burst read into the queue
+            let mut buf = [0u8; 1024];
+            cx.shared.dev_accel.lock(|a| {
+                a.acc_fifo_data(&mut buf).unwrap();
+            });
+
+            let mut header: bmi088::AccFifoFrameHeader;
+            let mut cursor = 0;
+            let mut frames_read: usize = 0;
+            while cursor + 7 < buf.len() && frames_read < 40 {
+                header = bmi088::AccFifoFrameHeader::from(buf[cursor]);
+
+                match header {
+                    bmi088::AccFifoFrameHeader::Acceleration(_tags) => {
+                        frames_read += 1;
+                        let d = bmi088::Sensor3DData::from_le_slice(
+                            buf[cursor + 1..cursor + 7].try_into().unwrap(),
+                        );
+                        defmt::debug!("[{},{},{}]", d.x, d.y, d.z);
+                    }
+                    bmi088::AccFifoFrameHeader::End => {
+                        break;
+                    }
+                    _ => {}
+                }
+
+                let n = header.bytes_to_read();
+                cursor += n + 1;
+            }
+            defmt::warn!("frames read: {}", frames_read);
+
+            // Adjust based on the number of frames read out and the sample
+            // rate. At 400Hz, we have 2.5ms per sample, therefore we should
+            // see 10 frames read out every time this loop runs.
+            Mono::delay_until(now + 25.millis()).await;
+        }
     }
 
-    // Task to configure the IMU
-    #[task(shared=[accel, gyro])]
-    async fn imu_config(cx: imu_config::Context) {
-        let acc = cx.shared.accel;
-        let gyro = cx.shared.gyro;
-
-        // reset both sensors
-        (acc, gyro).lock(|a, g| {
-            acc_enable(a).unwrap();
-            gyro_enable(g).unwrap();
-            configure_acc(a).unwrap();
-            configure_gyro(g).unwrap();
-        });
+    #[idle(shared=[dev_accel])]
+    fn idle(mut cx: idle::Context) -> ! {
+        loop {
+            let len = cx
+                .shared
+                .dev_accel
+                .lock(|a| a.acc_fifo_length_read().unwrap());
+            defmt::info!("len: {}", len);
+            Mono::delay_ms(&mut Mono, 10);
+            cortex_m::asm::nop();
+        }
     }
-
-    // Task to read data from the IMU
-    #[task(shared=[accel, gyro])]
-    async fn read_imu(cx: read_imu::Context) {
-        let mut acc = cx.shared.accel;
-        let mut gyro = cx.shared.gyro;
-        let (accdata, time) = acc.lock(|a| {
-            let data = a.acc_data().unwrap();
-            let time = a.sensor_time_24bit().unwrap();
-
-            (data, time)
-        });
-        let gyrodata = gyro.lock(|g| g.gyro_read_rate().unwrap());
-        defmt::info!(
-            "{}: [{:02}, {:02}, {:02}], [{:02}, {:02}, {:02}]",
-            time,
-            accdata.x,
-            accdata.y,
-            accdata.z,
-            gyrodata.x,
-            gyrodata.y,
-            gyrodata.z
-        );
-    }
-}
-
-fn acc_enable(a: &mut Bmi088<SpiInterface<AccelDev>>) -> Result<(), bmi088::Error<SpiBusErr>> {
-    a.acc_soft_reset()?;
-    Systick::delay_ms(&mut Systick, 1);
-    // dummy read, necessary for some reason.
-    a.acc_chipid()?;
-
-    let power = bmi088::AccOffOn::On;
-    a.acc_enable_write(power)?;
-    Systick::delay_us(&mut Systick, 450);
-
-    let wake = bmi088::AccWakeSuspend::Active;
-    a.acc_wake_suspend_write(wake)?;
-
-    // check matching chipID
-    let expected: u8 = 0x1E;
-    let acid = a.acc_chipid()?;
-    if acid != expected {
-        panic!("bad chipid accel: {:02}, expected {:02}", acid, expected);
-    }
-    Ok(())
-}
-
-fn gyro_enable(g: &mut Bmi088<SpiInterface<GyroDev>>) -> Result<(), bmi088::Error<SpiBusErr>> {
-    g.acc_soft_reset().unwrap();
-    Systick::delay_ms(&mut Systick, 30);
-
-    // power modes
-    g.gyro_power_mode_write(bmi088::GyroPowerMode::Normal)?;
-
-    // check matching chipid
-    let gcid = g.gyro_chipid()?;
-    let expected: u8 = 0x0F;
-    if gcid != expected {
-        panic!("bad chipid gyro: {:02x}, expected {:02x}", gcid, expected);
-    }
-    Ok(())
-}
-
-fn configure_acc(a: &mut Bmi088<SpiInterface<AccelDev>>) -> Result<(), bmi088::Error<SpiBusErr>> {
-    // configuration
-    let configuration = bmi088::AccelerometerConfig {
-        conf: bmi088::AccConf {
-            acc_bwp: bmi088::AccBandwidth::X1,
-            acc_odr: bmi088::AccDataRate::Hz100,
-        },
-        acc_range: bmi088::AccRange::G3,
-    };
-
-    a.acc_configuration_write(configuration)?;
-    let read_conf = a.acc_configuration_read()?;
-    assert!(read_conf == configuration);
-
-    // interrupts
-
-    // int 2 -- data ready output
-    let int2_conf = IntConfiguration {
-        int_pin: bmi088::IntPin::Output,
-        int_od: bmi088::PinBehavior::OpenDrain,
-        int_lvl: PinActive::ActiveLow,
-    };
-    a.int2_io_conf_write(int2_conf)?;
-    let read_conf = a.int2_io_conf_read()?;
-    assert!(read_conf == int2_conf);
-
-    // int 1 -- set interrupt input on gyro data active low
-    let int1_conf = IntConfiguration {
-        int_pin: bmi088::IntPin::Input,
-        int_od: bmi088::PinBehavior::PushPull,
-        int_lvl: PinActive::ActiveHigh,
-    };
-    a.int1_io_conf_write(int1_conf)?;
-    let read_conf = a.int1_io_conf_read()?;
-    assert!(read_conf == int1_conf);
-
-    // map data ready to int2
-    let drdy_int2 = bmi088::AccDrdyMap::Int2;
-    a.acc_map_drdy_write(drdy_int2)?;
-    let read_drdy_int2 = a.acc_map_drdy_read()?;
-    assert!(read_drdy_int2 == drdy_int2);
-
-    Ok(())
-}
-
-fn configure_gyro(g: &mut Bmi088<SpiInterface<GyroDev>>) -> Result<(), bmi088::Error<SpiBusErr>> {
-    // configuration
-    let bandwidth = bmi088::GyroBandwidth::Hz32;
-    let range = bmi088::GyroRange::Dps2000;
-
-    g.gyro_bandwidth_write(bandwidth)?;
-    g.gyro_range_write(range)?;
-
-    // interrupts
-    // int3 -- active low
-    g.gyro_conf_int3_write(bmi088::PinActive::ActiveHigh, bmi088::PinBehavior::PushPull)?;
-    // int3 map to gyro data ready
-    g.gyro_drdy_map_write(bmi088::GyroDrdyMap::Int3)?;
-    g.gyro_drdy_en(true)?;
-    Ok(())
 }

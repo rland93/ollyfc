@@ -4,7 +4,10 @@
 use defmt_rtt as _;
 use panic_probe as _;
 
-use rtic_monotonics::systick::Systick;
+use rtic_monotonics::systick_monotonic;
+use rtic_monotonics::Monotonic;
+systick_monotonic!(Mono, 1000);
+
 use stm32f4xx_hal::{pac, prelude::*};
 
 #[rtic::app(device = stm32f4xx_hal::pac)]
@@ -35,8 +38,7 @@ mod app {
             .freeze();
 
         let _syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         // Configure GPIO pin B10 for PWM output
         let gpiob = dp.GPIOB.split();
@@ -71,7 +73,7 @@ mod app {
             }
 
             led_pwm.set_duty(timer::Channel::C3, duty);
-            Systick::delay(10.millis()).await;
+            Mono::delay(10.millis()).await;
         }
     }
 }

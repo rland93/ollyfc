@@ -8,13 +8,14 @@ use defmt::info;
 use ollyfc::usb::protocol::FcDevice;
 use stm32f4xx_hal::{gpio, otg_fs, prelude::*};
 
+use rtic_monotonics::systick_monotonic;
+systick_monotonic!(Mono, 1000);
+
 #[rtic::app(device = stm32f4xx_hal::pac, peripherals = true, dispatchers = [USART1])]
 mod app {
 
-    use rtic_monotonics::{systick::Systick, Monotonic};
-    use usb_device::device;
-
     use super::*;
+    use usb_device::device;
 
     #[shared]
     struct Shared {
@@ -41,8 +42,7 @@ mod app {
             .freeze();
 
         let _syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         let gpioa = dp.GPIOA.split();
 
@@ -87,7 +87,6 @@ mod app {
 
             if poll_result {
                 defmt::debug!("USB device polled successfully in interrupt");
-                // Additional processing if needed
             }
         });
     }

@@ -5,8 +5,9 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 use embedded_hdc1080_rs::Hdc1080;
-use rtic_monotonics::systick::Systick;
+use rtic_monotonics::systick_monotonic;
 use rtic_monotonics::Monotonic;
+systick_monotonic!(Mono, 1000);
 
 use stm32f4xx_hal::{i2c, pac, prelude::*, timer};
 
@@ -37,8 +38,7 @@ mod app {
             .freeze();
 
         let _syscfg = dp.SYSCFG.constrain();
-        let systick_mono_token = rtic_monotonics::create_systick_token!();
-        Systick::start(cx.core.SYST, sysclk.to_Hz(), systick_mono_token);
+        Mono::start(cx.core.SYST, sysclk.to_Hz());
 
         let gpioa = dp.GPIOA.split();
         let gpioc = dp.GPIOC.split();
@@ -59,7 +59,7 @@ mod app {
     async fn temp_task(cx: temp_task::Context) {
         let temp_sensor = cx.local.temp_sensor;
         loop {
-            let now = rtic_monotonics::systick::Systick::now();
+            let now = Mono::now();
 
             let temp = temp_sensor.temperature().unwrap();
             let hum = temp_sensor.humidity().unwrap();
@@ -72,7 +72,7 @@ mod app {
             defmt::info!("Temperature: {}.{} C", int_part, frac_part);
             defmt::info!("Humidity: {}.{} %", int_hum, frac_hum);
 
-            rtic_monotonics::systick::Systick::delay_until(now + 20u32.millis()).await;
+            Mono::delay_until(now + 20u32.millis()).await;
         }
     }
 }
